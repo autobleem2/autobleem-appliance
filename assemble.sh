@@ -22,12 +22,16 @@ rm -rf "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 mkdir -p "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 tar -xzf "$dl"/pcsx-ab-*-"$EMU".tar.gz    -C "$STAGE/Autobleem/bin/emu"
 tar -xzf "$dl"/pcsx-abnxt-*-"$EMU".tar.gz -C "$STAGE/Autobleem/bin/emunxt"
-# 3. launcher(+resources), themes, cover DBs: the SAME pattern once those repos publish per-target artifacts:
-#      gh release download $VERSION --repo autobleem2/autobleem        --pattern "*-$PLATFORM.tar.gz" ...
+# 3. the launcher - PUBLISHED artifact (autobleem2/autobleem's publish-launcher.yml), fetched not built.
+#    launcher-<platform>.tar.gz is laid out as the launcher's own part of Autobleem/bin: autobleem/ (the gui
+#    + its resources) and abpad/ (the virtual-gamepad daemon + preload shim), so it extracts straight in.
+gh release download "$VERSION" --repo autobleem2/autobleem --pattern "launcher-$PLATFORM-*.tar.gz" --dir "$dl" --clobber
+tar -xzf "$dl"/launcher-"$PLATFORM"-*.tar.gz -C "$STAGE/Autobleem/bin"
+# 4. themes, cover DBs: the SAME pattern once those repos publish per-target artifacts:
 #      gh release download $VERSION --repo autobleem2/autobleem-themes --pattern "themes-$VERSION.tar.gz" ...
 #      curl $AB_REPO_URL/db/coversU.db ...
-echo "[assemble] launcher/themes/cover-DBs: fetched here once published (same mechanism)" >&2
-# 4. the deliverable
+echo "[assemble] themes/cover-DBs: fetched here once published (same mechanism)" >&2
+# 5. the deliverable
 out="autobleem-$PLATFORM-$VERSION.tar.gz"
 tar -czf "$out" -C "$work" "$TOP"
 echo "==> $out ($(du -h "$out" | cut -f1)); staged tree:"
