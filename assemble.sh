@@ -31,6 +31,9 @@ tar -xzf "$dl"/pcsx-abnxt-*-"$EMU".tar.gz -C "$STAGE/Autobleem/bin/emunxt"
 #    which stay in the launcher repo - no theme pack), so it extracts straight over the payload.
 fetch_release_assets autobleem2/autobleem "$VERSION" "launcher-$PLATFORM-*.tar.gz" "$dl"
 tar -xzf "$dl"/launcher-"$PLATFORM"-*.tar.gz -C "$STAGE"
+# the package's version: install.sh puts it on the data partition, where the launcher's update check reads
+# it (Env::productVersion), and the image builders name the image after it
+printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 # 4. cover DBs and sample games are NOT bundled - install.sh fetches them from the download repository at
 #    install / first boot (a Pi/PC-stick install has the network). The site side (autobleem-repo db/,
 #    autobleem-samples) is a separate publish, not part of the appliance payload.

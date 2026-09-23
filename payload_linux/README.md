@@ -18,7 +18,7 @@ stick image (`tools/make_pc_image.sh`) is the next step; until then, install Deb
 
     tar xzf autobleem-pcusb-i386.tar.gz && cd autobleem-pcusb && sudo bash install.sh
 
-Starting from a blank SD card? `docs/pi-install-guide.md` walks through flashing the OS, first boot and
+Starting from a blank SD card? `https://github.com/autobleem2/autobleem-main/blob/develop/docs/pi-install-guide.md` walks through flashing the OS, first boot and
 running the installer, start to finish. This page is the fuller reference once you're there.
 
 ## Status
@@ -65,7 +65,7 @@ pcsx-ab is checked in under `payload_linux/Autobleem/bin/emu/` (32-bit) and `pay
 
 Copy the tarball for your Pi's architecture over (`scp`, or just put it on a USB stick).
 
-Or build both on the build server's Docker image - `docker/run.sh ci/build.sh rpi rpi64`, see `docs/ci.md` -
+Or build both on the build server's Docker image - `docker/run.sh ci/build.sh rpi rpi64`, see `https://github.com/autobleem2/autobleem-main/blob/develop/docs/ci.md` -
 which also builds pcsx-ab from the same run and includes the real cover databases (a package built on a PC
 checkout has only the stubs in `db/`, so scanned games get no covers from that fallback).
 
@@ -115,11 +115,14 @@ answer at most two questions (which WiFi; RetroArch or PS1-only), and watch Auto
 above remains the fully proven path - see the "Status" table for how far this one has been exercised.
 
 **The ready-made images are on AutoBleem's download site.** In Raspberry Pi Imager: *App Options*
-(the gear, or Ctrl+Shift+X) *-> Content Repository -> Use custom* and enter
+(the gear, or Ctrl+Shift+X) *-> Content Repository -> Use custom* and enter one of
 
-    https://autobleem.retromenele.pl/rpi-imager/os_list.json
+    https://autobleem.retromenele.pl/rpi-imager/os_list.json           the latest release
+    https://autobleem.retromenele.pl/rpi-imager/os_list-testing.json   the build being tested
+    https://autobleem.retromenele.pl/rpi-imager/os_list-nightly.json   the newest development build
 
-(or start it as `rpi-imager --repo <that URL>`); AutoBleem then appears in the *Operating System* list
+(a list exists only while its channel has images - the site's Raspberry Pi tab shows which; or start
+Imager as `rpi-imager --repo <that URL>`); AutoBleem then appears in the *Operating System* list
 for both 32-bit and 64-bit, with Imager's own customisation screen (user, WiFi, SSH) on top. Or download
 an `.img.xz` from <https://autobleem.retromenele.pl/> and flash it with *Use custom*. The site's
 [Raspberry Pi page](https://autobleem.retromenele.pl/rpi-install.html) says which image fits which Pi.

@@ -101,10 +101,14 @@ jobs:
             [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::autobleem2/$r has no nightly pre-release yet (its develop CI makes it)"; exit 1; }
             fp+="$(gh api --paginate "repos/autobleem2/$r/releases/$id/assets" --jq '.[] | "'"$r"' \(.name) \(.size) \(.updated_at)"' | sort)"$'\n'
           done
-          # the build is named after the launcher's: launcher-psc-<git describe>.tar.gz
-          v="$(printf '%s' "$fp" | sed -n 's/^autobleem launcher-psc-\(.*\)\.tar\.gz .*/\1/p' | head -n1)"
-          [ -n "$v" ] || { echo "::error::no launcher-psc asset on autobleem2/autobleem@nightly"; exit 1; }
+          # the build is named after the launcher's (launcher-psc-<git describe>.tar.gz) plus what it was built
+          # from: -n<the components' fingerprint>. A night on which only an emulator or a tool changed is then a
+          # new name too - an installed nightly compares its VERSION with this and sees the update (named after
+          # the launcher alone, it saw the same version and was never offered it)
+          d="$(printf '%s' "$fp" | sed -n 's/^autobleem launcher-psc-\(.*\)\.tar\.gz .*/\1/p' | head -n1)"
+          [ -n "$d" ] || { echo "::error::no launcher-psc asset on autobleem2/autobleem@nightly"; exit 1; }
           sum="$(printf '%s' "$fp" | sha256sum | cut -c1-16)"
+          v="$d-n${sum:0:6}"
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "sources=$sum" >> "$GITHUB_OUTPUT"
           printf '%s' "$fp"
