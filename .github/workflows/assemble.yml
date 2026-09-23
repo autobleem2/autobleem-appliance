@@ -303,12 +303,24 @@ jobs:
           set -euo pipefail
           if [ "${{ needs.plan.outputs.channel }}" = nightly ]; then
             # a development build's images go next to its packages in nightly/<version>/ - not to
-            # rpi-imager/ (Imager's list is the releases') nor pc/images/
+            # rpi-imager/images/ nor pc/images/. A Pi image brings its rpi_imager_repo.json (merged with the
+            # other architecture's, as for a release below): repo_index.py makes rpi-imager/os_list-nightly.json,
+            # Imager's nightly repository, from it
+            V="${{ needs.plan.outputs.version }}"
+            extra=()
+            if [ "${{ steps.which.outputs.kind }}" = rpi ]; then
+              mkdir -p build_image/site
+              docker run --rm \
+                -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                ghcr.io/autobleem2/autobleem-build:latest \
+                python3 tools/merge_rpi_imager_json.py build_image/out/rpi_imager_repo.json \
+                  "$AB_REPO_DIR/nightly/$V/rpi_imager_repo.json" build_image/site/rpi_imager_repo.json
+              extra=(build_image/site/rpi_imager_repo.json)
+            fi
             docker run --rm \
               -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
               ghcr.io/autobleem2/autobleem-build:latest \
-              bash autobleem-repo-tools/tools/repo_publish.sh --local nightly \
-                "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz
+              bash autobleem-repo-tools/tools/repo_publish.sh --local nightly "$V" build_image/out/*.img.xz "${extra[@]}"
             exit 0
           fi
           case "${{ steps.which.outputs.kind }}" in
