@@ -19,7 +19,9 @@ cp -a payload_linux/. "$STAGE/"
 dl="$work/dl"; mkdir -p "$dl"
 fetch_release_assets autobleem2/pcsx-ab    "$VERSION" "pcsx-ab-*-$EMU.tar.gz"    "$dl"
 fetch_release_assets autobleem2/pcsx-abnxt "$VERSION" "pcsx-abnxt-*-$EMU.tar.gz" "$dl"
-rm -rf "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
+# the skeleton's checked-in emulator folders (emu*, emunxt*, one per architecture - make_rpi_package.sh's
+# staging picked one) all go: the device reads bin/emu and bin/emunxt only, filled from the release below
+rm -rf "$STAGE"/Autobleem/bin/emu "$STAGE"/Autobleem/bin/emu-* "$STAGE"/Autobleem/bin/emunxt "$STAGE"/Autobleem/bin/emunxt-*
 mkdir -p "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 tar -xzf "$dl"/pcsx-ab-*-"$EMU".tar.gz    -C "$STAGE/Autobleem/bin/emu"
 tar -xzf "$dl"/pcsx-abnxt-*-"$EMU".tar.gz -C "$STAGE/Autobleem/bin/emunxt"
