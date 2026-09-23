@@ -157,9 +157,15 @@ jobs:
                 --version "${{ needs.plan.outputs.version }}"
               ;;
             pcusb)
+              # NOT --rootless here: mmdebstrap --mode=unshare needs /etc/subuid+subgid entries and a
+              # non-root uid with a mapped account (docker/run.sh --userns fakes all of that) - real work
+              # to set up for no real security gain, since this sibling container already reaches the
+              # host's Docker socket (root-equivalent already). --mount (real root, the container's
+              # default when EUID==0) needs only --privileged on the docker run below (found on the first
+              # real run, 2026-09-23: "E: unable to unshare the mount namespace").
               reuse_arg=()
               [ -f "$CACHE/root.tar" ] && reuse_arg=(--reuse-root)
-              tools/make_pc_image.sh --rootless "${reuse_arg[@]}" \
+              tools/make_pc_image.sh --mount "${reuse_arg[@]}" \
                 --package dist/autobleem-pcusb-*.tar.gz \
                 --work "$CACHE" --out build_image/out \
                 --version "${{ needs.plan.outputs.version }}"
@@ -170,8 +176,11 @@ jobs:
           # a sibling container over the mounted docker.sock, not a GHA `container:` job (see the job's own
           # comment) - the image is public, no login needed. Both $PWD (the checkout) and the persistent
           # cache dir are bind-mounted at identical paths so they resolve the same for the daemon as for
-          # the runner.
-          docker run --rm \
+          # the runner. --privileged only for pcusb's --mount route (loop devices, grub-install) - rpi's
+          # --rootless needs none of that.
+          priv_arg=()
+          [ "${{ steps.which.outputs.kind }}" = pcusb ] && priv_arg=(--privileged)
+          docker run --rm "${priv_arg[@]}" \
             -v "$PWD:$PWD" -w "$PWD" \
             -v "$AB_IMAGE_CACHE_DIR:$AB_IMAGE_CACHE_DIR" \
             -e AB_IMAGE_CACHE_DIR -e AB_XZ_LEVEL \
