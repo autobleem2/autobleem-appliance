@@ -7,8 +7,8 @@
 # tools (autobleem2/autobleem-console-tools) and the emulators' -psc assets, into
 # autobleem-psc-<version>.tar.gz - no RetroArch and no cover databases, same reasoning as the Linux
 # appliances' install-time fetches (the console has no network at all, so AutoBleemInstaller.exe fetches
-# those on the PC instead - see assemble-psc.sh's own header). "psc" is not in the default platforms list
-# yet (untested in this workflow) - pass it explicitly via workflow_dispatch until proven.
+# those on the PC instead - see assemble-psc.sh's own header). psc is in the default platforms since
+# v2.0.0-alpha2 (proven by dispatch runs 2026-09-23), so a v* tag assembles and publishes it with the rest.
 #
 # Because it only downloads + tars, it runs on a plain hosted runner (gh is preinstalled there). Building the
 # flashable .img.xz from a payload is a separate, self-hosted step (it needs root/loop-mount or the rootless
@@ -31,7 +31,7 @@ on:
       platforms:
         description: platforms to assemble (space separated; rpi-armhf rpi-arm64 pcusb psc)
         type: string
-        default: 'rpi-armhf rpi-arm64 pcusb'
+        default: 'rpi-armhf rpi-arm64 pcusb psc'
 
 concurrency:
   group: assemble-${{ github.ref }}
@@ -48,7 +48,7 @@ jobs:
     steps:
       - id: p
         run: |
-          p="${{ inputs.platforms }}"; [ -n "$p" ] || p="rpi-armhf rpi-arm64 pcusb"
+          p="${{ inputs.platforms }}"; [ -n "$p" ] || p="rpi-armhf rpi-arm64 pcusb psc"
           echo "json=$(printf '%s\n' $p | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
           # a separate, psc-filtered list for the image job below: the console has no flashable image (a
           # stick tarball unpacked by AutoBleemInstaller.exe, not an .img.xz), and matrix context isn't
