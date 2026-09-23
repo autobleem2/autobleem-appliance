@@ -1,0 +1,84 @@
+# Assemble the Linux appliance payloads from PUBLISHED component artifacts - the compile-once/assemble-many
+# model (docs/repo-split-analysis.md). This workflow compiles NOTHING: assemble.sh fetches each component's
+# release assets (the launcher incl. abpad + themes from autobleem2/autobleem, the two emulators from
+# autobleem2/pcsx-ab and pcsx-abnxt) at one unified VERSION and composes payload_linux into
+# autobleem-<platform>-<version>.tar.gz. Cover DBs and samples are install-time site fetches, not bundled.
+#
+# Because it only downloads + tars, it runs on a plain hosted runner (gh is preinstalled there). Building the
+# flashable .img.xz from a payload is a separate, self-hosted step (it needs root/loop-mount or the rootless
+# debugfs path and the autobleem-build image's tools) - see tools/make_rpi_image.sh / make_pc_image.sh; that
+# job is added once a self-hosted runner is registered for this repo.
+#
+# Gated by AB_CI_ENABLED. Every component must already have a release at VERSION (the emulators + the
+# launcher publish theirs on a v* tag).
+name: assemble
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: the unified component version to assemble (e.g. v2.0.0-alpha1)
+        type: string
+        required: true
+      platforms:
+        description: platforms to assemble (space separated; rpi-armhf rpi-arm64 pcusb)
+        type: string
+        default: 'rpi-armhf rpi-arm64 pcusb'
+
+concurrency:
+  group: assemble-${{ github.ref }}-${{ inputs.version }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    if: vars.AB_CI_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      platforms: ${{ steps.p.outputs.json }}
+    steps:
+      - id: p
+        run: |
+          p="${{ inputs.platforms }}"; [ -n "$p" ] || p="rpi-armhf rpi-arm64 pcusb"
+          echo "json=$(printf '%s\n' $p | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+
+  assemble:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.plan.outputs.platforms) }}
+    runs-on: ubuntu-24.04
+    env:
+      # assemble.sh reaches the other public repos' releases through gh; the repo-scoped token reads public
+      # releases across the org fine.
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assemble ${{ matrix.platform }} @ ${{ inputs.version }}
+        run: bash assemble.sh "${{ matrix.platform }}" "${{ inputs.version }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: payload-${{ matrix.platform }}
+          path: autobleem-${{ matrix.platform }}-*.tar.gz
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [plan, assemble]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: payload-*
+          path: out
+          merge-multiple: true
+      - name: Attach assembled payloads to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""; case "${GITHUB_REF_NAME}" in *-*) prerelease="--prerelease";; esac
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --title "AutoBleem appliance ${GITHUB_REF_NAME}" --generate-notes $prerelease out/*.tar.gz || \
+          gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" out/*.tar.gz --clobber
