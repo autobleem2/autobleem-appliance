@@ -290,6 +290,15 @@ decompress_base_image() {
         printf '    would decompress %s -> %s\n' "$BASE_IMG_XZ" "$RAW_IMG"
         return 0
     fi
+    # a WORK_DIR that survives between runs (a persistent host cache, not a fresh temp dir) may already
+    # have this exact base decompressed - skip the (otherwise unconditional) re-decompress when RAW_IMG is
+    # newer than BASE_IMG_XZ, the same "trust it, don't re-verify" precedent --base already uses for a local
+    # compressed file. A freshly (re)downloaded/replaced BASE_IMG_XZ is newer than any old RAW_IMG, so this
+    # still decompresses whenever the base actually changed.
+    if [ -s "$RAW_IMG" ] && [ "$RAW_IMG" -nt "$BASE_IMG_XZ" ]; then
+        log "Reusing the already-decompressed $(basename "$RAW_IMG") (newer than $(basename "$BASE_IMG_XZ"))"
+        return 0
+    fi
     log "Decompressing $(basename "$BASE_IMG_XZ")"
     rm -f "$RAW_IMG"
     xz -T0 -dk -c "$BASE_IMG_XZ" >"$RAW_IMG"
