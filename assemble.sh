@@ -5,6 +5,7 @@
 #   PLATFORM: rpi-armhf | rpi-arm64 | pcusb        VERSION: e.g. v2.0.0-alpha1
 set -euo pipefail
 PLATFORM="${1:?platform}"; VERSION="${2:?version}"
+. "$(dirname "$0")/tools/release_assets.sh"
 case "$PLATFORM" in
   rpi-armhf) EMU=rpi-armhf; TOP=autobleem-rpi ;;
   rpi-arm64) EMU=rpi-arm64; TOP=autobleem-rpi ;;
@@ -16,8 +17,8 @@ work="$(mktemp -d)"; STAGE="$work/$TOP"; mkdir -p "$STAGE"
 cp -a payload_linux/. "$STAGE/"
 # 2. the emulators - PUBLISHED artifacts, fetched not built; pcsx-ab -> bin/emu, pcsx-abnxt -> bin/emunxt
 dl="$work/dl"; mkdir -p "$dl"
-gh release download "$VERSION" --repo autobleem2/pcsx-ab    --pattern "*-$EMU.tar.gz" --dir "$dl" --clobber
-gh release download "$VERSION" --repo autobleem2/pcsx-abnxt --pattern "*-$EMU.tar.gz" --dir "$dl" --clobber
+fetch_release_assets autobleem2/pcsx-ab    "$VERSION" "pcsx-ab-*-$EMU.tar.gz"    "$dl"
+fetch_release_assets autobleem2/pcsx-abnxt "$VERSION" "pcsx-abnxt-*-$EMU.tar.gz" "$dl"
 rm -rf "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 mkdir -p "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 tar -xzf "$dl"/pcsx-ab-*-"$EMU".tar.gz    -C "$STAGE/Autobleem/bin/emu"
@@ -26,7 +27,7 @@ tar -xzf "$dl"/pcsx-abnxt-*-"$EMU".tar.gz -C "$STAGE/Autobleem/bin/emunxt"
 #    launcher-<platform>.tar.gz mirrors the payload the launcher repo contributes: Autobleem/bin/autobleem
 #    (gui + resources), Autobleem/bin/abpad (the virtual-gamepad daemon + shim) and Themes/ (the five themes,
 #    which stay in the launcher repo - no theme pack), so it extracts straight over the payload.
-gh release download "$VERSION" --repo autobleem2/autobleem --pattern "launcher-$PLATFORM-*.tar.gz" --dir "$dl" --clobber
+fetch_release_assets autobleem2/autobleem "$VERSION" "launcher-$PLATFORM-*.tar.gz" "$dl"
 tar -xzf "$dl"/launcher-"$PLATFORM"-*.tar.gz -C "$STAGE"
 # 4. cover DBs and sample games are NOT bundled - install.sh fetches them from the download repository at
 #    install / first boot (a Pi/PC-stick install has the network). The site side (autobleem-repo db/,

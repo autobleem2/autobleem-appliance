@@ -22,6 +22,7 @@
 #   VERSION: e.g. v2.0.0-alpha1
 set -euo pipefail
 VERSION="${1:?version}"
+. "$(dirname "$0")/tools/release_assets.sh"
 
 work="$(mktemp -d)"; STAGE="$work/autobleem-psc"; mkdir -p "$STAGE"
 dl="$work/dl"; mkdir -p "$dl"
@@ -30,17 +31,22 @@ dl="$work/dl"; mkdir -p "$dl"
 #    Autobleem/{rc,start.sh,lib/libs.tar.gz}, Docs/, Games/, Themes/, Autobleem/bin/autobleem
 #    (gui+absplash+abfatflag+resources+internal.db) and Autobleem/bin/abpad. NOT RetroArch/, NOT Apps/ -
 #    see the header comment.
-gh release download "$VERSION" --repo autobleem2/autobleem --pattern "launcher-psc-*.tar.gz" --dir "$dl" --clobber
+fetch_release_assets autobleem2/autobleem "$VERSION" "launcher-psc-*.tar.gz" "$dl"
 tar -xzf "$dl"/launcher-psc-*.tar.gz -C "$STAGE"
+for need in 028c18a9-ec4b-4632-b2cf-d4e20f252e8f/LUPDATA.BIN Autobleem/start.sh Autobleem/rc/boot.sh \
+            Autobleem/lib/libs.tar.gz Autobleem/bin/autobleem/autobleem-gui; do
+    [ -e "$STAGE/$need" ] || { echo "launcher-psc lacks $need - an artifact from before the psc skeleton?" >&2; exit 1; }
+done
 
-# 2. the console tools (autobleem2/autobleem-console-tools): Apps/pscbios, Apps/abflashkit
-gh release download "$VERSION" --repo autobleem2/autobleem-console-tools --pattern "console-tools-psc-*.tar.gz" --dir "$dl" --clobber
-mkdir -p "$STAGE/Apps"
-tar -xzf "$dl"/console-tools-psc-*.tar.gz -C "$STAGE/Apps"
+# 2. the console tools (autobleem2/autobleem-console-tools): the tarball's root is Apps/ - pscbios and
+#    abflashkit, abflashkit with its kernel/ flash payload
+fetch_release_assets autobleem2/autobleem-console-tools "$VERSION" "console-tools-psc-*.tar.gz" "$dl"
+tar -xzf "$dl"/console-tools-psc-*.tar.gz -C "$STAGE"
+[ -s "$STAGE/Apps/abflashkit/kernel/boot.img" ] || { echo "console-tools-psc lacks Apps/abflashkit/kernel/boot.img" >&2; exit 1; }
 
 # 3. the two PS1 emulators - PUBLISHED artifacts, fetched not built; pcsx-ab -> bin/emu, pcsx-abnxt -> bin/emunxt
-gh release download "$VERSION" --repo autobleem2/pcsx-ab    --pattern "*-psc.tar.gz" --dir "$dl" --clobber
-gh release download "$VERSION" --repo autobleem2/pcsx-abnxt --pattern "*-psc.tar.gz" --dir "$dl" --clobber
+fetch_release_assets autobleem2/pcsx-ab    "$VERSION" "pcsx-ab-*-psc.tar.gz"    "$dl"
+fetch_release_assets autobleem2/pcsx-abnxt "$VERSION" "pcsx-abnxt-*-psc.tar.gz" "$dl"
 rm -rf "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 mkdir -p "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 tar -xzf "$dl"/pcsx-ab-*-psc.tar.gz    -C "$STAGE/Autobleem/bin/emu"
@@ -61,7 +67,10 @@ chmod +x "$STAGE"/Apps/*/*.sh "$STAGE"/Apps/pscbios/pscbios "$STAGE"/Apps/abflas
 chmod +x "$STAGE"/Autobleem/bin/abpad/abpadd 2>/dev/null || true
 chmod +x "$STAGE"/Autobleem/bin/emu/pcsx-ab "$STAGE"/Autobleem/bin/emunxt/pcsx-ab 2>/dev/null || true
 
+# rooted at the stick's root, no top-level folder (unlike the Linux tarballs): AutoBleemInstaller.exe
+# extracts it straight onto the stick and recognises it by Autobleem/bin/autobleem/autobleem-gui, Themes/
+# and VERSION at the top - make_psc_package.sh's tarball has always been made this way
 out="autobleem-psc-$VERSION.tar.gz"
-tar -czf "$out" --owner=0 --group=0 -C "$work" "autobleem-psc"
+tar -czf "$out" --owner=0 --group=0 -C "$STAGE" .
 echo "==> $out ($(du -h "$out" | cut -f1)); staged tree:"
 find "$STAGE" -maxdepth 2 -type d | sed "s#$STAGE/##"
