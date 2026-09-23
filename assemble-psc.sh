@@ -32,7 +32,7 @@ dl="$work/dl"; mkdir -p "$dl"
 
 # 1. the psc skeleton + launcher (autobleem2/autobleem's publish-launcher.yml, psc target): the exploit dir,
 #    Autobleem/{rc,start.sh,lib/libs.tar.gz}, Docs/, Games/, Themes/, Autobleem/bin/autobleem
-#    (gui+absplash+abfatflag+resources+internal.db) and Autobleem/bin/abpad. NOT RetroArch/, NOT Apps/ -
+#    (gui+absplash+abfatflag+abupdate+resources+internal.db) and Autobleem/bin/abpad. NOT RetroArch/, NOT Apps/ -
 #    see the header comment.
 fetch_release_assets autobleem2/autobleem "$VERSION" "launcher-psc-*.tar.gz" "$dl"
 tar -xzf "$dl"/launcher-psc-*.tar.gz -C "$STAGE"
@@ -64,7 +64,7 @@ find "$STAGE" -type f -name placeholder -delete
 # executable bits: none of the three tarballs above are guaranteed to have kept them (Windows-hosted repo
 # splits have already lost this bit more than once this session - see assemble.sh's own history)
 chmod +x "$STAGE/Autobleem/bin/autobleem/autobleem-gui" "$STAGE/Autobleem/bin/autobleem/absplash" \
-         "$STAGE/Autobleem/bin/autobleem/abfatflag" 2>/dev/null || true
+         "$STAGE/Autobleem/bin/autobleem/abfatflag" "$STAGE/Autobleem/bin/autobleem/abupdate" 2>/dev/null || true
 chmod +x "$STAGE"/Autobleem/*.sh "$STAGE"/Autobleem/rc/*.sh 2>/dev/null || true
 chmod +x "$STAGE"/Apps/*/*.sh "$STAGE"/Apps/pscbios/pscbios "$STAGE"/Apps/abflashkit/abflashkit 2>/dev/null || true
 chmod +x "$STAGE"/Autobleem/bin/abpad/abpadd 2>/dev/null || true
