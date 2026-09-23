@@ -31,8 +31,15 @@ tar -xzf "$dl"/launcher-"$PLATFORM"-*.tar.gz -C "$STAGE"
 # 4. cover DBs and sample games are NOT bundled - install.sh fetches them from the download repository at
 #    install / first boot (a Pi/PC-stick install has the network). The site side (autobleem-repo db/,
 #    autobleem-samples) is a separate publish, not part of the appliance payload.
-# 5. the deliverable
-out="autobleem-$PLATFORM-$VERSION.tar.gz"
+# 5. the deliverable. pcusb keeps the established "-i386" naming (tools/make_rpi_package.sh's own
+#    convention, predating this assembler) - the site's repo_index.py matches releases/ files by a regex
+#    that requires it literally (^autobleem-pcusb-i386.*\.tar\.gz$), unlike rpi/rpi64 which match any
+#    suffix; a plain autobleem-pcusb-<version>.tar.gz silently fails to be picked up as the pcusb release
+#    (found live on the site, 2026-09-23 - the auto-updater kept pointing at a stale pre-migration file).
+case "$PLATFORM" in
+  pcusb) out="autobleem-pcusb-i386-$VERSION.tar.gz" ;;
+  *)     out="autobleem-$PLATFORM-$VERSION.tar.gz" ;;
+esac
 tar -czf "$out" -C "$work" "$TOP"
 echo "==> $out ($(du -h "$out" | cut -f1)); staged tree:"
 find "$STAGE/Autobleem/bin" -maxdepth 2 -type d | sed "s#$STAGE/##"
