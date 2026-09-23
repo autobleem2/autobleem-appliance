@@ -71,9 +71,95 @@ jobs:
           path: autobleem-${{ matrix.platform }}-*.tar.gz
           retention-days: 30
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
+  image:
+    # A separate gate from AB_CI_ENABLED: this job needs a self-hosted runner with Docker for THIS repo,
+    # which is not registered yet - AB_IMAGE_BUILD_ENABLED keeps it from queuing forever on every tag once
+    # AB_CI_ENABLED alone is on. Flip both together once the runner exists. UNVERIFIED - no runner to try it
+    # on yet; the exact filenames the two scripts leave behind may need a small fix on the first real run.
+    #
+    # Caches the pristine "before AutoBleem" base across runs (the owner's ask, 2026-09-23): RPi's downloaded
+    # OS Lite image, and PC's mmdebstrap root.tar (via --reuse-root) since Debian ships no base image for
+    # i386 to download. Keyed by month, no restore-keys fallback on purpose - a miss on a new month forces
+    # one fresh download/build and re-saves, so the base still refreshes periodically instead of caching
+    # forever. See the image-build-cache-base memory note.
+    if: vars.AB_CI_ENABLED == 'true' && vars.AB_IMAGE_BUILD_ENABLED == 'true'
     needs: [plan, assemble]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: rpi-armhf
+            kind: rpi
+            arch: armhf
+          - platform: rpi-arm64
+            kind: rpi
+            arch: arm64
+          - platform: pcusb
+            kind: pcusb
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: payload-${{ matrix.platform }}
+          path: dist
+      - id: month
+        run: echo "key=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      - name: Restore RPi base image cache
+        if: matrix.kind == 'rpi'
+        uses: actions/cache@v6
+        with:
+          path: image-base/rpi-${{ matrix.arch }}
+          key: image-base-rpi-${{ matrix.arch }}-${{ steps.month.outputs.key }}
+      - name: Restore PC root.tar cache
+        if: matrix.kind == 'pcusb'
+        uses: actions/cache@v6
+        with:
+          path: image-base/pcusb-root.tar
+          key: image-base-pcusb-${{ steps.month.outputs.key }}
+      - name: Build the ${{ matrix.platform }} image
+        run: |
+          set -euo pipefail
+          rm -rf build_image && mkdir -p build_image image-base
+          case "${{ matrix.kind }}" in
+            rpi)
+              base_arg=()
+              existing="$(ls image-base/rpi-${{ matrix.arch }}/*.img.xz 2>/dev/null | head -1 || true)"
+              [ -n "$existing" ] && base_arg=(--base "$existing")
+              tools/make_rpi_image.sh --arch "${{ matrix.arch }}" "${base_arg[@]}" \
+                --package dist/autobleem-${{ matrix.platform }}-*.tar.gz \
+                --work build_image --out build_image/out \
+                --version "${{ needs.plan.outputs.version }}"
+              # cache whatever base .img.xz make_rpi_image.sh left directly in the work dir (not build_image/out,
+              # which is the AutoBleem output) - a no-op when --base already pointed at the cache
+              mkdir -p "image-base/rpi-${{ matrix.arch }}"
+              find build_image -maxdepth 1 -name '*.img.xz' -exec cp -n {} "image-base/rpi-${{ matrix.arch }}/" \; || true
+              ;;
+            pcusb)
+              reuse_arg=()
+              if [ -f image-base/pcusb-root.tar ]; then
+                cp image-base/pcusb-root.tar build_image/root.tar
+                reuse_arg=(--reuse-root)
+              fi
+              tools/make_pc_image.sh "${reuse_arg[@]}" \
+                --package dist/autobleem-pcusb-*.tar.gz \
+                --work build_image --out build_image/out \
+                --version "${{ needs.plan.outputs.version }}"
+              cp build_image/root.tar image-base/pcusb-root.tar
+              ;;
+          esac
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-${{ matrix.platform }}
+          path: build_image/out/*
+          retention-days: 30
+
+  release:
+    # image is in needs so its artifacts are available when it ran, but it's gated off until a self-hosted
+    # runner is registered and GitHub skips (not fails) a gated-off job - `if: always()` here keeps this job
+    # from being skipped in turn just because `image` was skipped; it still requires assemble to have passed.
+    needs: [plan, assemble, image]
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.assemble.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -81,6 +167,13 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: payload-*
+          path: out
+          merge-multiple: true
+      - name: Also attach any built images (best effort - the image job may be gated off)
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: image-*
           path: out
           merge-multiple: true
       - name: Attach assembled payloads to the release
