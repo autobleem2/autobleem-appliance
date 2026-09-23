@@ -10,6 +10,10 @@
 # those on the PC instead - see assemble-psc.sh's own header). psc is in the default platforms since
 # v2.0.0-alpha2 (proven by dispatch runs 2026-09-23), so a v* tag assembles and publishes it with the rest.
 #
+# Platform "win" is the Windows product (assemble-win.sh): the launcher's program folder (publish-launcher.yml's
+# win target) with both emulators' win64 packages and autobleem-pc-tools' AutoBleemWinSetup.exe, zipped as
+# autobleem-win-product-<v>.zip and packed by makensis into AutoBleemSetup-<v>.exe. No image either.
+#
 # Because it only downloads + tars, it runs on a plain hosted runner (gh is preinstalled there). Building the
 # flashable .img.xz from a payload is a separate, self-hosted step (it needs root/loop-mount or the rootless
 # debugfs path and the autobleem-build image's tools) - see tools/make_rpi_image.sh / make_pc_image.sh; that
@@ -43,9 +47,9 @@ on:
         description: the unified component version to assemble (e.g. v2.0.0-alpha1) - defaults to the pushed tag; not used for nightly
         type: string
       platforms:
-        description: platforms to assemble (space separated; rpi-armhf rpi-arm64 pcusb psc)
+        description: platforms to assemble (space separated; rpi-armhf rpi-arm64 pcusb psc win)
         type: string
-        default: 'rpi-armhf rpi-arm64 pcusb psc'
+        default: 'rpi-armhf rpi-arm64 pcusb psc win'
 
 concurrency:
   group: assemble-${{ github.ref }}
@@ -68,13 +72,13 @@ jobs:
     steps:
       - id: p
         run: |
-          p="${{ inputs.platforms }}"; [ -n "$p" ] || p="rpi-armhf rpi-arm64 pcusb psc"
+          p="${{ inputs.platforms }}"; [ -n "$p" ] || p="rpi-armhf rpi-arm64 pcusb psc win"
           echo "json=$(printf '%s\n' $p | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
           # a separate, psc-filtered list for the image job below: the console has no flashable image (a
           # stick tarball unpacked by AutoBleemInstaller.exe, not an .img.xz), and matrix context isn't
           # available in a job-level `if:` (found live, 2026-09-23 - "Unrecognized named-value: 'matrix'"),
           # so the exclusion has to happen here instead of inside that job.
-          echo "image_json=$(printf '%s\n' $p | { grep -v '^psc$' || true; } | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+          echo "image_json=$(printf '%s\n' $p | { grep -v -e '^psc$' -e '^win$' || true; } | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
       - id: v
         run: |
           set -euo pipefail
@@ -133,17 +137,24 @@ jobs:
         run: |
           if [ "${{ matrix.platform }}" = psc ]; then
             bash assemble-psc.sh "${{ needs.plan.outputs.version }}"
+          elif [ "${{ matrix.platform }}" = win ]; then
+            # the Windows product: the program folder zip and the NSIS installer (makensis from Ubuntu's nsis)
+            sudo apt-get install -y -qq nsis >/dev/null
+            bash assemble-win.sh "${{ needs.plan.outputs.version }}"
           else
             bash assemble.sh "${{ matrix.platform }}" "${{ needs.plan.outputs.version }}"
           fi
       - uses: actions/upload-artifact@v7
         with:
           name: payload-${{ matrix.platform }}
-          # the zips are psc's alone (assemble-psc.sh); on the Linux platforms those two patterns match nothing
+          # the zips are psc's (assemble-psc.sh) and win's (assemble-win.sh); on the Linux platforms only the
+          # tarball pattern matches
           path: |
             autobleem-${{ matrix.platform }}-*.tar.gz
             AutoBleemInstaller-*.zip
             UpdateRoms-*.zip
+            autobleem-win-product-*.zip
+            AutoBleemSetup-*.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -356,7 +367,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           prerelease=""; case "${GITHUB_REF_NAME}" in *-*) prerelease="--prerelease";; esac
-          shopt -s nullglob; files=(out/*.tar.gz out/*.zip)
+          shopt -s nullglob; files=(out/*.tar.gz out/*.zip out/*.exe)
           gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
             --title "AutoBleem appliance ${GITHUB_REF_NAME}" --generate-notes $prerelease "${files[@]}" || \
           gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" "${files[@]}" --clobber
@@ -394,7 +405,7 @@ jobs:
           # looping (see the update-version-match memory note) - never rename this folder by hand.
           # The psc zips (AutoBleemInstaller, UpdateRoms) go in the same folder: the installer takes UpdateRoms
           # from the release whose psc-fs is its own package.
-          shopt -s nullglob; files=(out/*.tar.gz out/*.zip)
+          shopt -s nullglob; files=(out/*.tar.gz out/*.zip out/*.exe)
           kind=release
           if [ "${{ needs.plan.outputs.channel }}" = nightly ]; then
             # a development build: nightly/<version>/, with the fingerprint of what it was built from, which
