@@ -22,12 +22,16 @@ rm -rf "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 mkdir -p "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 tar -xzf "$dl"/pcsx-ab-*-"$EMU".tar.gz    -C "$STAGE/Autobleem/bin/emu"
 tar -xzf "$dl"/pcsx-abnxt-*-"$EMU".tar.gz -C "$STAGE/Autobleem/bin/emunxt"
-# 3. launcher(+resources), themes, cover DBs: the SAME pattern once those repos publish per-target artifacts:
-#      gh release download $VERSION --repo autobleem2/autobleem        --pattern "*-$PLATFORM.tar.gz" ...
-#      gh release download $VERSION --repo autobleem2/autobleem-themes --pattern "themes-$VERSION.tar.gz" ...
-#      curl $AB_REPO_URL/db/coversU.db ...
-echo "[assemble] launcher/themes/cover-DBs: fetched here once published (same mechanism)" >&2
-# 4. the deliverable
+# 3. the launcher - PUBLISHED artifact (autobleem2/autobleem's publish-launcher.yml), fetched not built.
+#    launcher-<platform>.tar.gz mirrors the payload the launcher repo contributes: Autobleem/bin/autobleem
+#    (gui + resources), Autobleem/bin/abpad (the virtual-gamepad daemon + shim) and Themes/ (the five themes,
+#    which stay in the launcher repo - no theme pack), so it extracts straight over the payload.
+gh release download "$VERSION" --repo autobleem2/autobleem --pattern "launcher-$PLATFORM-*.tar.gz" --dir "$dl" --clobber
+tar -xzf "$dl"/launcher-"$PLATFORM"-*.tar.gz -C "$STAGE"
+# 4. cover DBs and sample games are NOT bundled - install.sh fetches them from the download repository at
+#    install / first boot (a Pi/PC-stick install has the network). The site side (autobleem-repo db/,
+#    autobleem-samples) is a separate publish, not part of the appliance payload.
+# 5. the deliverable
 out="autobleem-$PLATFORM-$VERSION.tar.gz"
 tar -czf "$out" -C "$work" "$TOP"
 echo "==> $out ($(du -h "$out" | cut -f1)); staged tree:"
