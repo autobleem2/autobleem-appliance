@@ -147,7 +147,11 @@ jobs:
               # privileged --mount mode whenever EUID==0 - without this they pick --mount and then fail
               # missing loop-mount tools (found on the first real run, 2026-09-23: "missing required tool:
               # udevadm"). --rootless needs only debugfs/mtools/xz, all in this image, regardless of uid.
-              tools/make_rpi_image.sh --arch "${{ steps.which.outputs.arch }}" --rootless "${base_arg[@]}" \
+              # --keep-raw: leaves the decompressed ~3.1 GB raw .img in $CACHE too, which the script's own
+              # newer-than check (2026-09-23) then reuses on the next run instead of re-decompressing (a
+              # modest ~30s saving here, but free once the base itself is already cached) - costs that
+              # extra disk space on the host permanently, on top of the ~550 MB compressed base.
+              tools/make_rpi_image.sh --arch "${{ steps.which.outputs.arch }}" --rootless --keep-raw "${base_arg[@]}" \
                 --package dist/autobleem-${{ matrix.platform }}-*.tar.gz \
                 --work "$CACHE" --out build_image/out \
                 --version "${{ needs.plan.outputs.version }}"
