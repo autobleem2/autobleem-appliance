@@ -97,6 +97,13 @@ jobs:
           - platform: pcusb
             kind: pcusb
     runs-on: [self-hosted, linux, x64]
+    container:
+      # --rootless needs debugfs/mtools/xz etc. which a bare runner host doesn't have - the autobleem-build
+      # image's `all` stage carries them (the same tools its PC-stick image job uses).
+      image: ghcr.io/autobleem2/autobleem-build:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
