@@ -43,12 +43,18 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       platforms: ${{ steps.p.outputs.json }}
+      image_platforms: ${{ steps.p.outputs.image_json }}
       version: ${{ steps.v.outputs.version }}
     steps:
       - id: p
         run: |
           p="${{ inputs.platforms }}"; [ -n "$p" ] || p="rpi-armhf rpi-arm64 pcusb"
           echo "json=$(printf '%s\n' $p | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+          # a separate, psc-filtered list for the image job below: the console has no flashable image (a
+          # stick tarball unpacked by AutoBleemInstaller.exe, not an .img.xz), and matrix context isn't
+          # available in a job-level `if:` (found live, 2026-09-23 - "Unrecognized named-value: 'matrix'"),
+          # so the exclusion has to happen here instead of inside that job.
+          echo "image_json=$(printf '%s\n' $p | { grep -v '^psc$' || true; } | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
       - id: v
         run: |
           v="${{ inputs.version }}"
@@ -92,17 +98,16 @@ jobs:
     # Persists the pristine "before AutoBleem" base across runs on the HOST (not actions/cache - see
     # AB_IMAGE_CACHE_DIR below and the image-build-cache-base memory note) so a repeat build skips the RPi
     # OS download / PC mmdebstrap step entirely.
-    # matrix.platform != 'psc': the console has no flashable image - it's a stick tarball unpacked by
-    # AutoBleemInstaller.exe, not an .img.xz. Excluded here rather than from the platforms list itself so
-    # `assemble` and `release`/`publish-release` below can still treat psc like any other platform.
-    if: vars.AB_CI_ENABLED == 'true' && vars.AB_IMAGE_BUILD_ENABLED == 'true' && matrix.platform != 'psc'
+    if: vars.AB_CI_ENABLED == 'true' && vars.AB_IMAGE_BUILD_ENABLED == 'true'
     needs: [plan, assemble]
     strategy:
       fail-fast: false
-      # the SAME filtered list assemble uses - not a fixed include list, so requesting one platform doesn't
-      # queue all three on the one runner (kind/arch are derived from the platform name inside the step).
+      # plan's psc-filtered list, NOT the same one `assemble` uses: the console has no flashable image (a
+      # stick tarball unpacked by AutoBleemInstaller.exe, not an .img.xz). A job-level `if:` can't see the
+      # matrix context to exclude it there instead (found live, 2026-09-23 - "Unrecognized named-value:
+      # 'matrix'"), so the exclusion happens in `plan` and this job's matrix simply never gets a psc entry.
       matrix:
-        platform: ${{ fromJSON(needs.plan.outputs.platforms) }}
+        platform: ${{ fromJSON(needs.plan.outputs.image_platforms) }}
     runs-on: [self-hosted, linux, x64]
     # NOT a `container:` job: this runner is itself a Docker container (myoung34/github-runner), and the
     # Actions runner refuses to nest another container job inside one without container-hooks set up, which
