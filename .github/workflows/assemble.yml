@@ -85,7 +85,12 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: payload-${{ matrix.platform }}
-          path: autobleem-${{ matrix.platform }}-*.tar.gz
+          # the zips are psc's alone (assemble-psc.sh); on the Linux platforms those two patterns match nothing
+          path: |
+            autobleem-${{ matrix.platform }}-*.tar.gz
+            AutoBleemInstaller-*.zip
+            UpdateRoms-*.zip
+          if-no-files-found: error
           retention-days: 30
 
   image:
@@ -287,9 +292,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           prerelease=""; case "${GITHUB_REF_NAME}" in *-*) prerelease="--prerelease";; esac
+          shopt -s nullglob; files=(out/*.tar.gz out/*.zip)
           gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
-            --title "AutoBleem appliance ${GITHUB_REF_NAME}" --generate-notes $prerelease out/*.tar.gz || \
-          gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" out/*.tar.gz --clobber
+            --title "AutoBleem appliance ${GITHUB_REF_NAME}" --generate-notes $prerelease "${files[@]}" || \
+          gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" "${files[@]}" --clobber
 
   publish-release:
     # separate from the GH release above: this is the site's releases/<version>/ - what the launcher's own
@@ -320,8 +326,11 @@ jobs:
           # string every component's own build embeds as its version when built at an exact, clean tag (no
           # -<hash> suffix), which is what makes the auto-updater's version comparison agree instead of
           # looping (see the update-version-match memory note) - never rename this folder by hand.
+          # The psc zips (AutoBleemInstaller, UpdateRoms) go in the same folder: the installer takes UpdateRoms
+          # from the release whose psc-fs is its own package.
+          shopt -s nullglob; files=(out/*.tar.gz out/*.zip)
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
             ghcr.io/autobleem2/autobleem-build:latest \
             bash autobleem-repo-tools/tools/repo_publish.sh --local release \
-              "${{ needs.plan.outputs.version }}" out/*.tar.gz
+              "${{ needs.plan.outputs.version }}" "${files[@]}"
