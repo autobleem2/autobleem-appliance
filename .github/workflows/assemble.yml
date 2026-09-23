@@ -271,3 +271,38 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
             --title "AutoBleem appliance ${GITHUB_REF_NAME}" --generate-notes $prerelease out/*.tar.gz || \
           gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" out/*.tar.gz --clobber
+
+  publish-release:
+    # separate from the GH release above: this is the site's releases/<version>/ - what the launcher's own
+    # auto-updater reads (releases/latest.json / unstable.json, UpdateService) and what the landing page's
+    # "Install" panel shows. Missing until now (2026-09-23, the owner caught it): image publishing only ever
+    # touched rpi-imager/images/, never this. Self-hosted (needs REPO_DIR), so a separate job from `release`
+    # above (which only needs GITHUB_TOKEN). needs plan+assemble only - doesn't need image, which can be
+    # gated off independently.
+    needs: [plan, assemble]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.assemble.result == 'success'
+    runs-on: [self-hosted, linux, x64]
+    env:
+      AB_REPO_DIR: /home/claude/autobleem-repo
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: autobleem2/autobleem-repo
+          path: autobleem-repo-tools
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: payload-*
+          path: out
+          merge-multiple: true
+      - name: Publish releases/${{ needs.plan.outputs.version }} to the site
+        run: |
+          set -euo pipefail
+          # needs.plan.outputs.version is the pushed tag verbatim (GITHUB_REF_NAME on a v* tag) - the SAME
+          # string every component's own build embeds as its version when built at an exact, clean tag (no
+          # -<hash> suffix), which is what makes the auto-updater's version comparison agree instead of
+          # looping (see the update-version-match memory note) - never rename this folder by hand.
+          docker run --rm \
+            -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+            ghcr.io/autobleem2/autobleem-build:latest \
+            bash autobleem-repo-tools/tools/repo_publish.sh --local release \
+              "${{ needs.plan.outputs.version }}" out/*.tar.gz
