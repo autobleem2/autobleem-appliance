@@ -5,7 +5,8 @@
 # repo's tools/make_psc_package.sh tarball branch exactly (see that script's own comment for the full
 # rationale), just sourcing every piece from a release artifact instead of a local build directory. Also
 # writes the two Windows downloads that belong to the same release: AutoBleemInstaller-<v>.zip (the
-# installer + this tarball, what a console user downloads) and UpdateRoms-<v>.zip (step 5).
+# installer, what a console user downloads - it fetches this tarball from the channel picked in it) and
+# UpdateRoms-<v>.zip (step 5).
 #
 # This tarball is deliberately NOT self-contained: no RetroArch/ and no cover databases
 # (Autobleem/bin/db/), same as make_psc_package.sh's tarball branch - AutoBleemInstaller.exe
@@ -79,8 +80,8 @@ find "$STAGE" -maxdepth 2 -type d | sed "s#$STAGE/##"
 
 # 5. the two Windows programs the console release carries, from autobleem-pc-tools' pc-tools-win64 asset
 #    (Release, stripped, packed), laid out as the site has always had them:
-#    AutoBleemInstaller-<v>.zip = AutoBleemInstaller/{AutoBleemInstaller.exe,README.txt,<the tarball above>}
-#      - the exe looks for the package next to itself (the site's "installer" kind, the console's download)
+#    AutoBleemInstaller-<v>.zip = AutoBleemInstaller/{AutoBleemInstaller.exe,README.txt} - the site's
+#      "installer" kind, the console's download; the package comes from the channel chosen in it
 #    UpdateRoms-<v>.zip = UpdateRoms/{UpdateRoms.exe,README.txt} - the installer puts it on every stick,
 #      taking it from the release whose psc-fs is its own package, so it has to be published with this one
 fetch_release_assets autobleem2/autobleem-pc-tools "$VERSION" "pc-tools-win64-*.zip" "$dl"
@@ -89,10 +90,9 @@ unzip -q "$dl"/pc-tools-win64-*.zip -d "$win"
 for need in AutoBleemInstaller/AutoBleemInstaller.exe UpdateRoms/UpdateRoms.exe; do
     [ -s "$win/$need" ] || { echo "pc-tools-win64 lacks $need" >&2; exit 1; }
 done
-cp "$out" "$win/AutoBleemInstaller/"
-# UpdateRoms beside the installer too: the installer puts it on the stick from there first (same release,
-# no network), and only asks the site when an older bundle has none
-cp -a "$win/UpdateRoms" "$win/AutoBleemInstaller/UpdateRoms"
+# the installer is the exe and its README only (2026-09-23, the owner's call): it downloads the stick
+# package - the tarball above, published as this release's psc-fs - and UpdateRoms from the channel the
+# user picks in it, so neither rides in its zip any more
 mkzip() { # mkzip OUT PARENT TOP - OUT holds PARENT/TOP as TOP/...
     local zip_out; zip_out="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; rm -f "$zip_out"
     if command -v zip >/dev/null 2>&1; then
