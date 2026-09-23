@@ -98,6 +98,11 @@ jobs:
     # this runner needs: launch a SIBLING container by hand over the mounted docker.sock instead, with
     # -v "$PWD:$PWD" so the path resolves the same for the daemon as for the runner (RUNNER_WORK in
     # compose.yml exists for exactly this - the runner's workspace is bind-mounted at an identical path).
+    env:
+      # xz -T0 -2: the owner's fast-compression call (2026-09-23) - faster still than the scripts' own
+      # default of 4 (which was itself already the fast choice over level 6, 7 min vs 12 for ~2% smaller).
+      # Pinned explicitly so CI never silently drifts to a slower level.
+      AB_XZ_LEVEL: '2'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -138,7 +143,11 @@ jobs:
               base_arg=()
               existing="$(ls "image-base/${{ matrix.platform }}"/*.img.xz 2>/dev/null | head -1 || true)"
               [ -n "$existing" ] && base_arg=(--base "$existing")
-              tools/make_rpi_image.sh --arch "$arch" "${base_arg[@]}" \
+              # --rootless explicitly: the container runs as root (uid 0), and both scripts default to the
+              # privileged --mount mode whenever EUID==0 - without this they pick --mount and then fail
+              # missing loop-mount tools (found on the first real run, 2026-09-23: "missing required tool:
+              # udevadm"). --rootless needs only debugfs/mtools/xz, all in this image, regardless of uid.
+              tools/make_rpi_image.sh --arch "$arch" --rootless "${base_arg[@]}" \
                 --package dist/autobleem-${{ matrix.platform }}-*.tar.gz \
                 --work build_image --out build_image/out \
                 --version "${{ needs.plan.outputs.version }}"
@@ -153,7 +162,7 @@ jobs:
                 cp image-base/pcusb-root.tar build_image/root.tar
                 reuse_arg=(--reuse-root)
               fi
-              tools/make_pc_image.sh "${reuse_arg[@]}" \
+              tools/make_pc_image.sh --rootless "${reuse_arg[@]}" \
                 --package dist/autobleem-pcusb-*.tar.gz \
                 --work build_image --out build_image/out \
                 --version "${{ needs.plan.outputs.version }}"
