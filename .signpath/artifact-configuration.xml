@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The SignPath project's default artifact configuration - paste it there; SignPath reads its own copy, not
+     this file. The artifact is assemble.yml's win-setup-unsigned: AutoBleemSetup-<version>.exe, the NSIS
+     installer assemble-win.sh builds. The programs inside it arrive signed from their own repositories'
+     releases (autobleem, autobleem-pc-tools, pcsx-ab, pcsx-abnxt); the uninstaller NSIS writes at install
+     time is not signed. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="AutoBleemSetup-*.exe">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

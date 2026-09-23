@@ -163,7 +163,40 @@ jobs:
             AutoBleemFlasher-*.zip
             UpdateRoms-*.zip
             autobleem-win-product-*.zip
-            AutoBleemSetup-*.exe
+          if-no-files-found: error
+          retention-days: 30
+      # the NSIS installer goes on its own, unsigned: sign-win signs it and uploads it as payload-win-setup
+      - uses: actions/upload-artifact@v7
+        if: matrix.platform == 'win'
+        with:
+          name: win-setup-unsigned
+          path: AutoBleemSetup-*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-win:
+    # AutoBleemSetup-<v>.exe's Authenticode signature through SignPath (.signpath/artifact-configuration.xml;
+    # autobleem-build's signpath-sign action has the rules - the programs inside arrive signed from their own
+    # releases): a release must come back signed, a nightly ships unsigned when nobody approves it within the
+    # hour. plan and assemble run on hosted runners, which SignPath requires; the self-hosted jobs come after.
+    needs: [plan, assemble]
+    if: needs.plan.outputs.skip != 'true' && contains(fromJSON(needs.plan.outputs.platforms), 'win')
+    runs-on: ubuntu-24.04
+    permissions: { actions: read, contents: read }
+    steps:
+      - uses: autobleem2/autobleem-build/.github/actions/signpath-sign@develop
+        with:
+          artifact: win-setup-unsigned
+          path: setup
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          required: ${{ needs.plan.outputs.channel == 'release' }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: payload-win-setup
+          path: setup/AutoBleemSetup-*.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -365,8 +398,11 @@ jobs:
     # image is in needs so its artifacts are available when it ran, but it's gated off until a self-hosted
     # runner is registered and GitHub skips (not fails) a gated-off job - `if: always()` here keeps this job
     # from being skipped in turn just because `image` was skipped; it still requires assemble to have passed.
-    needs: [plan, assemble, image]
-    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.assemble.result == 'success'
+    # sign-win likewise: skipped by a run without win
+    needs: [plan, assemble, image, sign-win]
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/v') && needs.assemble.result == 'success' &&
+      (needs.sign-win.result == 'success' || needs.sign-win.result == 'skipped')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -400,9 +436,11 @@ jobs:
     # touched rpi-imager/images/, never this. Self-hosted (needs REPO_DIR), so a separate job from `release`
     # above (which only needs GITHUB_TOKEN). needs plan+assemble only - doesn't need image, which can be
     # gated off independently.
-    needs: [plan, assemble]
+    # sign-win: the signed AutoBleemSetup-<v>.exe (payload-win-setup); always() because a run without win skips it
+    needs: [plan, assemble, sign-win]
     if: >-
-      needs.assemble.result == 'success' &&
+      always() && needs.assemble.result == 'success' &&
+      (needs.sign-win.result == 'success' || needs.sign-win.result == 'skipped') &&
       (startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.channel == 'nightly')
     runs-on: [self-hosted, linux, x64]
     env:
