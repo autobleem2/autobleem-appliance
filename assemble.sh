@@ -56,6 +56,9 @@ if [ "$PLATFORM" = pcusb ]; then
   win="$work/win"; mkdir -p "$win"
   unzip -q "$dl"/pc-tools-win64-*.zip 'AutoBleemFlasher/*' -d "$win"
   [ -s "$win/AutoBleemFlasher/AutoBleemFlasher.exe" ] || { echo "pc-tools-win64 lacks AutoBleemFlasher/AutoBleemFlasher.exe" >&2; exit 1; }
+  # VERSION next to the program: Env::productVersion() reads it, so its window and log show this release's
+  # version, written as everything else writes it (the owner's rule, 2026-09-23)
+  printf '%s\n' "$VERSION" > "$win/AutoBleemFlasher/VERSION"
   zip_out="$PWD/AutoBleemFlasher-$VERSION.zip"; rm -f "$zip_out"
   (cd "$win" && zip -r -9 -q "$zip_out" AutoBleemFlasher)
   ls -l "$zip_out"

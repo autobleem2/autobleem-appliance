@@ -90,6 +90,11 @@ unzip -q "$dl"/pc-tools-win64-*.zip -d "$win"
 for need in AutoBleemInstaller/AutoBleemInstaller.exe UpdateRoms/UpdateRoms.exe; do
     [ -s "$win/$need" ] || { echo "pc-tools-win64 lacks $need" >&2; exit 1; }
 done
+# VERSION next to the program: Env::productVersion() reads it, so its window and log show this release's
+# version, written as everything else writes it (the owner's rule, 2026-09-23)
+# (the installer copies UpdateRoms/ onto the stick whole, VERSION with it)
+printf '%s\n' "$VERSION" > "$win/AutoBleemInstaller/VERSION"
+printf '%s\n' "$VERSION" > "$win/UpdateRoms/VERSION"
 # the installer is the exe and its README only (2026-09-23, the owner's call): it downloads the stick
 # package - the tarball above, published as this release's psc-fs - and UpdateRoms from the channel the
 # user picks in it, so neither rides in its zip any more
