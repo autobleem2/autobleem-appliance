@@ -90,6 +90,9 @@ for need in AutoBleemInstaller/AutoBleemInstaller.exe UpdateRoms/UpdateRoms.exe;
     [ -s "$win/$need" ] || { echo "pc-tools-win64 lacks $need" >&2; exit 1; }
 done
 cp "$out" "$win/AutoBleemInstaller/"
+# UpdateRoms beside the installer too: the installer puts it on the stick from there first (same release,
+# no network), and only asks the site when an older bundle has none
+cp -a "$win/UpdateRoms" "$win/AutoBleemInstaller/UpdateRoms"
 mkzip() { # mkzip OUT PARENT TOP - OUT holds PARENT/TOP as TOP/...
     local zip_out; zip_out="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; rm -f "$zip_out"
     if command -v zip >/dev/null 2>&1; then
