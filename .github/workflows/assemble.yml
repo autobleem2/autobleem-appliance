@@ -147,11 +147,12 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: payload-${{ matrix.platform }}
-          # the zips are psc's (assemble-psc.sh) and win's (assemble-win.sh); on the Linux platforms only the
-          # tarball pattern matches
+          # the zips are psc's (assemble-psc.sh), win's (assemble-win.sh) and the flasher (pcusb); on the other
+          # Linux platforms only the tarball pattern matches
           path: |
             autobleem-${{ matrix.platform }}-*.tar.gz
             AutoBleemInstaller-*.zip
+            AutoBleemFlasher-*.zip
             UpdateRoms-*.zip
             autobleem-win-product-*.zip
             AutoBleemSetup-*.exe

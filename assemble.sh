@@ -46,3 +46,17 @@ esac
 tar -czf "$out" -C "$work" "$TOP"
 echo "==> $out ($(du -h "$out" | cut -f1)); staged tree:"
 find "$STAGE/Autobleem/bin" -maxdepth 2 -type d | sed "s#$STAGE/##"
+
+# 6. the PC stick's Windows flasher (autobleem2/autobleem-pc-tools' AutoBleemFlasher/, from its pc-tools-win64
+#    asset): AutoBleemFlasher-<v>.zip = AutoBleemFlasher/{AutoBleemFlasher.exe,README.txt}, the site's
+#    "flasher" kind, published with this release so the PC stick panel offers it next to the image. It
+#    downloads the image of the channel picked in it, so nothing else rides in the zip.
+if [ "$PLATFORM" = pcusb ]; then
+  fetch_release_assets autobleem2/autobleem-pc-tools "$VERSION" "pc-tools-win64-*.zip" "$dl"
+  win="$work/win"; mkdir -p "$win"
+  unzip -q "$dl"/pc-tools-win64-*.zip 'AutoBleemFlasher/*' -d "$win"
+  [ -s "$win/AutoBleemFlasher/AutoBleemFlasher.exe" ] || { echo "pc-tools-win64 lacks AutoBleemFlasher/AutoBleemFlasher.exe" >&2; exit 1; }
+  zip_out="$PWD/AutoBleemFlasher-$VERSION.zip"; rm -f "$zip_out"
+  (cd "$win" && zip -r -9 -q "$zip_out" AutoBleemFlasher)
+  ls -l "$zip_out"
+fi
