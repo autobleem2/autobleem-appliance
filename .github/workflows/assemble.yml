@@ -285,7 +285,7 @@ jobs:
             -v "$PWD:$PWD" -w "$PWD" \
             -v "$AB_IMAGE_CACHE_DIR:$AB_IMAGE_CACHE_DIR" \
             -e AB_IMAGE_CACHE_DIR -e AB_XZ_LEVEL \
-            ghcr.io/autobleem2/autobleem-build:latest \
+            ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
             bash "$PWD/build_image/run.sh"
       - uses: actions/upload-artifact@v7
         with:
@@ -313,14 +313,14 @@ jobs:
               mkdir -p build_image/site
               docker run --rm \
                 -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-                ghcr.io/autobleem2/autobleem-build:latest \
+                ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
                 python3 tools/merge_rpi_imager_json.py build_image/out/rpi_imager_repo.json \
                   "$AB_REPO_DIR/nightly/$V/rpi_imager_repo.json" build_image/site/rpi_imager_repo.json
               extra=(build_image/site/rpi_imager_repo.json)
             fi
             docker run --rm \
               -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-              ghcr.io/autobleem2/autobleem-build:latest \
+              ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
               bash autobleem-repo-tools/tools/repo_publish.sh --local nightly "$V" build_image/out/*.img.xz "${extra[@]}"
             exit 0
           fi
@@ -334,20 +334,20 @@ jobs:
               mkdir -p build_image/site
               docker run --rm \
                 -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-                ghcr.io/autobleem2/autobleem-build:latest \
+                ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
                 python3 tools/merge_rpi_imager_json.py build_image/out/rpi_imager_repo.json \
                   "$AB_REPO_DIR/rpi-imager/images/${{ needs.plan.outputs.version }}/rpi_imager_repo.json" \
                   build_image/site/rpi_imager_repo.json
               docker run --rm \
                 -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-                ghcr.io/autobleem2/autobleem-build:latest \
+                ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
                 bash autobleem-repo-tools/tools/repo_publish.sh --local image \
                   "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz build_image/site/rpi_imager_repo.json
               ;;
             pcusb)
               docker run --rm \
                 -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-                ghcr.io/autobleem2/autobleem-build:latest \
+                ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
                 bash autobleem-repo-tools/tools/repo_publish.sh --local pc-image \
                   "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz
               ;;
@@ -430,6 +430,6 @@ jobs:
           fi
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-            ghcr.io/autobleem2/autobleem-build:latest \
+            ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
             bash autobleem-repo-tools/tools/repo_publish.sh --local "$kind" \
               "${{ needs.plan.outputs.version }}" "${files[@]}"
