@@ -86,16 +86,10 @@ jobs:
     needs: [plan, assemble]
     strategy:
       fail-fast: false
+      # the SAME filtered list assemble uses - not a fixed include list, so requesting one platform doesn't
+      # queue all three on the one runner (kind/arch are derived from the platform name inside the step).
       matrix:
-        include:
-          - platform: rpi-armhf
-            kind: rpi
-            arch: armhf
-          - platform: rpi-arm64
-            kind: rpi
-            arch: arm64
-          - platform: pcusb
-            kind: pcusb
+        platform: ${{ fromJSON(needs.plan.outputs.platforms) }}
     runs-on: [self-hosted, linux, x64]
     container:
       # --rootless needs debugfs/mtools/xz etc. which a bare runner host doesn't have - the autobleem-build
@@ -110,16 +104,23 @@ jobs:
         with:
           name: payload-${{ matrix.platform }}
           path: dist
+      - id: which
+        run: |
+          case "${{ matrix.platform }}" in
+            rpi-armhf) echo "kind=rpi" >> "$GITHUB_OUTPUT"; echo "arch=armhf" >> "$GITHUB_OUTPUT" ;;
+            rpi-arm64) echo "kind=rpi" >> "$GITHUB_OUTPUT"; echo "arch=arm64" >> "$GITHUB_OUTPUT" ;;
+            pcusb)     echo "kind=pcusb" >> "$GITHUB_OUTPUT" ;;
+          esac
       - id: month
         run: echo "key=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
       - name: Restore RPi base image cache
-        if: matrix.kind == 'rpi'
+        if: steps.which.outputs.kind == 'rpi'
         uses: actions/cache@v6
         with:
-          path: image-base/rpi-${{ matrix.arch }}
-          key: image-base-rpi-${{ matrix.arch }}-${{ steps.month.outputs.key }}
+          path: image-base/${{ matrix.platform }}
+          key: image-base-${{ matrix.platform }}-${{ steps.month.outputs.key }}
       - name: Restore PC root.tar cache
-        if: matrix.kind == 'pcusb'
+        if: steps.which.outputs.kind == 'pcusb'
         uses: actions/cache@v6
         with:
           path: image-base/pcusb-root.tar
@@ -128,19 +129,20 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf build_image && mkdir -p build_image image-base
-          case "${{ matrix.kind }}" in
+          case "${{ steps.which.outputs.kind }}" in
             rpi)
+              arch="${{ steps.which.outputs.arch }}"
               base_arg=()
-              existing="$(ls image-base/rpi-${{ matrix.arch }}/*.img.xz 2>/dev/null | head -1 || true)"
+              existing="$(ls "image-base/${{ matrix.platform }}"/*.img.xz 2>/dev/null | head -1 || true)"
               [ -n "$existing" ] && base_arg=(--base "$existing")
-              tools/make_rpi_image.sh --arch "${{ matrix.arch }}" "${base_arg[@]}" \
+              tools/make_rpi_image.sh --arch "$arch" "${base_arg[@]}" \
                 --package dist/autobleem-${{ matrix.platform }}-*.tar.gz \
                 --work build_image --out build_image/out \
                 --version "${{ needs.plan.outputs.version }}"
               # cache whatever base .img.xz make_rpi_image.sh left directly in the work dir (not build_image/out,
               # which is the AutoBleem output) - a no-op when --base already pointed at the cache
-              mkdir -p "image-base/rpi-${{ matrix.arch }}"
-              find build_image -maxdepth 1 -name '*.img.xz' -exec cp -n {} "image-base/rpi-${{ matrix.arch }}/" \; || true
+              mkdir -p "image-base/${{ matrix.platform }}"
+              find build_image -maxdepth 1 -name '*.img.xz' -exec cp -n {} "image-base/${{ matrix.platform }}/" \; || true
               ;;
             pcusb)
               reuse_arg=()
