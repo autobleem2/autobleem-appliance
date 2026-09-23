@@ -170,9 +170,13 @@ jobs:
               # host's Docker socket (root-equivalent already). --mount (real root, the container's
               # default when EUID==0) needs only --privileged on the docker run below (found on the first
               # real run, 2026-09-23: "E: unable to unshare the mount namespace").
-              reuse_arg=()
-              [ -f "$CACHE/root.tar" ] && reuse_arg=(--reuse-root)
-              tools/make_pc_image.sh --mount "${reuse_arg[@]}" \
+              # NOT --reuse-root: it skips mmdebstrap entirely, INCLUDING its customize-hook that injects
+              # the AutoBleem package - so a reused root keeps whatever package was baked in last time, with
+              # no way to update it. Safe only when the exact same content is being rebuilt (a dev-iteration
+              # shortcut); unsafe here since a real build's package differs every time. Found the hard way,
+              # 2026-09-23: verify_image() correctly refused to ship a stale/mismatched package rather than
+              # silently produce a broken image ("the package inside the image is X bytes, the file is Y").
+              tools/make_pc_image.sh --mount \
                 --package dist/autobleem-pcusb-*.tar.gz \
                 --work "$CACHE" --out build_image/out \
                 --version "${{ needs.plan.outputs.version }}"
@@ -210,11 +214,23 @@ jobs:
           set -euo pipefail
           case "${{ steps.which.outputs.kind }}" in
             rpi)
+              # rpi-armhf and rpi-arm64 both publish into the SAME rpi-imager/images/<version>/ - each
+              # build only fills its OWN os_list entry, leaving the other one as raw __PLACEHOLDER__ tokens
+              # (make_rpi_image.sh always starts from the checked-in template) - publishing that as-is
+              # overwrites whichever architecture published first back to broken placeholders (found live
+              # on the site, 2026-09-23). Merge with what's already there before publishing.
+              mkdir -p build_image/site
+              docker run --rm \
+                -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                ghcr.io/autobleem2/autobleem-build:latest \
+                python3 tools/merge_rpi_imager_json.py build_image/out/rpi_imager_repo.json \
+                  "$AB_REPO_DIR/rpi-imager/images/${{ needs.plan.outputs.version }}/rpi_imager_repo.json" \
+                  build_image/site/rpi_imager_repo.json
               docker run --rm \
                 -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
                 ghcr.io/autobleem2/autobleem-build:latest \
                 bash autobleem-repo-tools/tools/repo_publish.sh --local image \
-                  "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz build_image/out/rpi_imager_repo.json
+                  "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz build_image/site/rpi_imager_repo.json
               ;;
             pcusb)
               docker run --rm \
