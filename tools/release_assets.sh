@@ -7,8 +7,11 @@
 # list can go on missing an asset uploaded after the release was published, for good, while the release's
 # own /releases/<id>/assets endpoint has it (seen 2026-09-23: launcher-psc and console-tools-psc attached to
 # v2.0.0-alpha1 afterwards, "no assets match the file pattern" minutes later). The tag only resolves the id.
+#
+# AB_SOURCE_TAG, when set, is the release fetched from instead of TAG - `nightly` for a development build
+# (every component's rolling pre-release of its develop branch), while VERSION still names what is assembled.
 fetch_release_assets() {
-    local repo="$1" tag="$2" glob="$3" dir="$4" id aid name n=0
+    local repo="$1" tag="${AB_SOURCE_TAG:-$2}" glob="$3" dir="$4" id aid name n=0
     id="$(gh api "repos/$repo/releases/tags/$tag" --jq .id)" || { echo "no release $tag in $repo" >&2; return 1; }
     while IFS=$'\t' read -r aid name; do
         [ -n "$aid" ] || continue

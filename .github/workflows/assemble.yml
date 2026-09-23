@@ -18,15 +18,29 @@
 # A v* tag on this repo is the normal trigger (VERSION = the tag itself - every component must already have
 # a release there, which the emulators + the launcher publish on their own v* tags); workflow_dispatch takes
 # an explicit version for a re-run or a dry run against an unreleased version. Gated by AB_CI_ENABLED.
+#
+# The development build (channel `nightly`: the nightly schedule, or a manual run with channel=nightly) is
+# the same assembly from every component's rolling `nightly` pre-release - what each one's develop CI keeps
+# current through autobleem-build's nightly-release action - named after the launcher's build (git describe,
+# v2.0.0-alpha2-5-gabc1234) and published to the site's nightly/<version>/ (the page's "dev" channel; never
+# an update channel). The schedule skips a night on which no component's nightly changed (sources.json in
+# the published folder is the fingerprint it compares).
 name: assemble
 
 on:
   push:
     tags: ['v*']
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
+      channel:
+        description: release = the components' v* releases; nightly = their rolling develop builds
+        type: choice
+        options: [release, nightly]
+        default: release
       version:
-        description: the unified component version to assemble (e.g. v2.0.0-alpha1) - defaults to the pushed tag
+        description: the unified component version to assemble (e.g. v2.0.0-alpha1) - defaults to the pushed tag; not used for nightly
         type: string
       platforms:
         description: platforms to assemble (space separated; rpi-armhf rpi-arm64 pcusb psc)
@@ -45,6 +59,12 @@ jobs:
       platforms: ${{ steps.p.outputs.json }}
       image_platforms: ${{ steps.p.outputs.image_json }}
       version: ${{ steps.v.outputs.version }}
+      channel: ${{ steps.v.outputs.channel }}
+      source_tag: ${{ steps.v.outputs.source_tag }}
+      sources: ${{ steps.v.outputs.sources }}
+      skip: ${{ steps.v.outputs.skip }}
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - id: p
         run: |
@@ -57,13 +77,45 @@ jobs:
           echo "image_json=$(printf '%s\n' $p | { grep -v '^psc$' || true; } | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
       - id: v
         run: |
-          v="${{ inputs.version }}"
-          if [ -z "$v" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="$GITHUB_REF_NAME"; fi
-          [ -n "$v" ] || { echo "no version: push a v* tag, or pass workflow_dispatch's version input" >&2; exit 1; }
+          set -euo pipefail
+          channel="${{ inputs.channel }}"
+          [ "${{ github.event_name }}" = schedule ] && channel=nightly
+          [ -n "$channel" ] || channel=release
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          if [ "$channel" = release ]; then
+            v="${{ inputs.version }}"
+            if [ -z "$v" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="$GITHUB_REF_NAME"; fi
+            [ -n "$v" ] || { echo "no version: push a v* tag, or pass workflow_dispatch's version input" >&2; exit 1; }
+            echo "version=$v" >> "$GITHUB_OUTPUT"; echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "source_tag=nightly" >> "$GITHUB_OUTPUT"
+          # what every component's nightly pre-release holds now: name, size and upload time of each asset
+          fp=""
+          for r in autobleem pcsx-ab pcsx-abnxt autobleem-console-tools autobleem-pc-tools; do
+            id="$(gh api "repos/autobleem2/$r/releases/tags/nightly" --jq .id 2>/dev/null || true)"
+            [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::autobleem2/$r has no nightly pre-release yet (its develop CI makes it)"; exit 1; }
+            fp+="$(gh api --paginate "repos/autobleem2/$r/releases/$id/assets" --jq '.[] | "'"$r"' \(.name) \(.size) \(.updated_at)"' | sort)"$'\n'
+          done
+          # the build is named after the launcher's: launcher-psc-<git describe>.tar.gz
+          v="$(printf '%s' "$fp" | sed -n 's/^autobleem launcher-psc-\(.*\)\.tar\.gz .*/\1/p' | head -n1)"
+          [ -n "$v" ] || { echo "::error::no launcher-psc asset on autobleem2/autobleem@nightly"; exit 1; }
+          sum="$(printf '%s' "$fp" | sha256sum | cut -c1-16)"
           echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "sources=$sum" >> "$GITHUB_OUTPUT"
+          printf '%s' "$fp"
+          # the schedule skips a night nothing changed on: the published folder's sources.json says what it was
+          # built from
+          skip=false
+          if [ "${{ github.event_name }}" = schedule ] &&
+             curl -sf "https://autobleem.retromenele.pl/nightly/$v/sources.json" | grep -q "\"$sum\""; then
+            skip=true; echo "nightly/$v was built from these same components - nothing to do"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
   assemble:
     needs: plan
+    if: needs.plan.outputs.skip != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -73,6 +125,8 @@ jobs:
       # assemble.sh reaches the other public repos' releases through gh; the repo-scoped token reads public
       # releases across the org fine.
       GH_TOKEN: ${{ github.token }}
+      # empty for a release (the components' VERSION release), `nightly` for the development build
+      AB_SOURCE_TAG: ${{ needs.plan.outputs.source_tag }}
     steps:
       - uses: actions/checkout@v7
       - name: Assemble ${{ matrix.platform }} @ ${{ needs.plan.outputs.version }}
@@ -135,7 +189,7 @@ jobs:
       # the site-publish tooling (repo_publish.sh + its page-generator merge), only needed on a real
       # release - a separate checkout since it split into its own repo (autobleem-repo).
       - uses: actions/checkout@v7
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.channel == 'nightly'
         with:
           repository: autobleem2/autobleem-repo
           path: autobleem-repo-tools
@@ -231,11 +285,21 @@ jobs:
       # (never installed on the server on purpose). Also bind-mounts REPO_DIR itself into the sibling
       # container, since that's what --local writes into directly.
       - name: Publish the image to the site
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.channel == 'nightly'
         env:
           AB_REPO_DIR: /home/claude/autobleem-repo
         run: |
           set -euo pipefail
+          if [ "${{ needs.plan.outputs.channel }}" = nightly ]; then
+            # a development build's images go next to its packages in nightly/<version>/ - not to
+            # rpi-imager/ (Imager's list is the releases') nor pc/images/
+            docker run --rm \
+              -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+              ghcr.io/autobleem2/autobleem-build:latest \
+              bash autobleem-repo-tools/tools/repo_publish.sh --local nightly \
+                "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz
+            exit 0
+          fi
           case "${{ steps.which.outputs.kind }}" in
             rpi)
               # rpi-armhf and rpi-arm64 both publish into the SAME rpi-imager/images/<version>/ - each
@@ -305,7 +369,9 @@ jobs:
     # above (which only needs GITHUB_TOKEN). needs plan+assemble only - doesn't need image, which can be
     # gated off independently.
     needs: [plan, assemble]
-    if: startsWith(github.ref, 'refs/tags/v') && needs.assemble.result == 'success'
+    if: >-
+      needs.assemble.result == 'success' &&
+      (startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.channel == 'nightly')
     runs-on: [self-hosted, linux, x64]
     env:
       AB_REPO_DIR: /home/claude/autobleem-repo
@@ -329,8 +395,17 @@ jobs:
           # The psc zips (AutoBleemInstaller, UpdateRoms) go in the same folder: the installer takes UpdateRoms
           # from the release whose psc-fs is its own package.
           shopt -s nullglob; files=(out/*.tar.gz out/*.zip)
+          kind=release
+          if [ "${{ needs.plan.outputs.channel }}" = nightly ]; then
+            # a development build: nightly/<version>/, with the fingerprint of what it was built from, which
+            # the next scheduled run compares to skip an unchanged night
+            kind=nightly
+            printf '{"sources": "%s", "run": "%s/%s/actions/runs/%s"}\n' "${{ needs.plan.outputs.sources }}" \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > out/sources.json
+            files+=(out/sources.json)
+          fi
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
             ghcr.io/autobleem2/autobleem-build:latest \
-            bash autobleem-repo-tools/tools/repo_publish.sh --local release \
+            bash autobleem-repo-tools/tools/repo_publish.sh --local "$kind" \
               "${{ needs.plan.outputs.version }}" "${files[@]}"
