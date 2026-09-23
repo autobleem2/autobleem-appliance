@@ -186,6 +186,7 @@ jobs:
     steps:
       - uses: autobleem2/autobleem-build/.github/actions/signpath-sign@develop
         with:
+          enabled: ${{ vars.AB_SIGNING_ENABLED == 'true' }}
           artifact: win-setup-unsigned
           path: setup
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
