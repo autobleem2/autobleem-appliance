@@ -1,8 +1,14 @@
-# Assemble the Linux appliance payloads from PUBLISHED component artifacts - the compile-once/assemble-many
-# model (docs/repo-split-analysis.md). This workflow compiles NOTHING: assemble.sh fetches each component's
-# release assets (the launcher incl. abpad + themes from autobleem2/autobleem, the two emulators from
-# autobleem2/pcsx-ab and pcsx-abnxt) at one unified VERSION and composes payload_linux into
-# autobleem-<platform>-<version>.tar.gz. Cover DBs and samples are install-time site fetches, not bundled.
+# Assemble the appliance payloads from PUBLISHED component artifacts - the compile-once/assemble-many
+# model (docs/repo-split-analysis.md). This workflow compiles NOTHING: assemble.sh fetches each Linux
+# component's release assets (the launcher incl. abpad + themes from autobleem2/autobleem, the two emulators
+# from autobleem2/pcsx-ab and pcsx-abnxt) at one unified VERSION and composes payload_linux into
+# autobleem-<platform>-<version>.tar.gz; assemble-psc.sh does the same for the console (platform "psc") from
+# the launcher's psc artifact (which also carries the psc skeleton - see publish-launcher.yml), the console
+# tools (autobleem2/autobleem-console-tools) and the emulators' -psc assets, into
+# autobleem-psc-<version>.tar.gz - no RetroArch and no cover databases, same reasoning as the Linux
+# appliances' install-time fetches (the console has no network at all, so AutoBleemInstaller.exe fetches
+# those on the PC instead - see assemble-psc.sh's own header). "psc" is not in the default platforms list
+# yet (untested in this workflow) - pass it explicitly via workflow_dispatch until proven.
 #
 # Because it only downloads + tars, it runs on a plain hosted runner (gh is preinstalled there). Building the
 # flashable .img.xz from a payload is a separate, self-hosted step (it needs root/loop-mount or the rootless
@@ -23,7 +29,7 @@ on:
         description: the unified component version to assemble (e.g. v2.0.0-alpha1) - defaults to the pushed tag
         type: string
       platforms:
-        description: platforms to assemble (space separated; rpi-armhf rpi-arm64 pcusb)
+        description: platforms to assemble (space separated; rpi-armhf rpi-arm64 pcusb psc)
         type: string
         default: 'rpi-armhf rpi-arm64 pcusb'
 
@@ -64,7 +70,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Assemble ${{ matrix.platform }} @ ${{ needs.plan.outputs.version }}
-        run: bash assemble.sh "${{ matrix.platform }}" "${{ needs.plan.outputs.version }}"
+        run: |
+          if [ "${{ matrix.platform }}" = psc ]; then
+            bash assemble-psc.sh "${{ needs.plan.outputs.version }}"
+          else
+            bash assemble.sh "${{ matrix.platform }}" "${{ needs.plan.outputs.version }}"
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: payload-${{ matrix.platform }}
@@ -81,7 +92,10 @@ jobs:
     # Persists the pristine "before AutoBleem" base across runs on the HOST (not actions/cache - see
     # AB_IMAGE_CACHE_DIR below and the image-build-cache-base memory note) so a repeat build skips the RPi
     # OS download / PC mmdebstrap step entirely.
-    if: vars.AB_CI_ENABLED == 'true' && vars.AB_IMAGE_BUILD_ENABLED == 'true'
+    # matrix.platform != 'psc': the console has no flashable image - it's a stick tarball unpacked by
+    # AutoBleemInstaller.exe, not an .img.xz. Excluded here rather than from the platforms list itself so
+    # `assemble` and `release`/`publish-release` below can still treat psc like any other platform.
+    if: vars.AB_CI_ENABLED == 'true' && vars.AB_IMAGE_BUILD_ENABLED == 'true' && matrix.platform != 'psc'
     needs: [plan, assemble]
     strategy:
       fail-fast: false
