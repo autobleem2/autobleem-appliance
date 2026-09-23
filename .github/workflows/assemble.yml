@@ -9,24 +9,26 @@
 # debugfs path and the autobleem-build image's tools) - see tools/make_rpi_image.sh / make_pc_image.sh; that
 # job is added once a self-hosted runner is registered for this repo.
 #
-# Gated by AB_CI_ENABLED. Every component must already have a release at VERSION (the emulators + the
-# launcher publish theirs on a v* tag).
+# A v* tag on this repo is the normal trigger (VERSION = the tag itself - every component must already have
+# a release there, which the emulators + the launcher publish on their own v* tags); workflow_dispatch takes
+# an explicit version for a re-run or a dry run against an unreleased version. Gated by AB_CI_ENABLED.
 name: assemble
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: the unified component version to assemble (e.g. v2.0.0-alpha1)
+        description: the unified component version to assemble (e.g. v2.0.0-alpha1) - defaults to the pushed tag
         type: string
-        required: true
       platforms:
         description: platforms to assemble (space separated; rpi-armhf rpi-arm64 pcusb)
         type: string
         default: 'rpi-armhf rpi-arm64 pcusb'
 
 concurrency:
-  group: assemble-${{ github.ref }}-${{ inputs.version }}
+  group: assemble-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -35,11 +37,18 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       platforms: ${{ steps.p.outputs.json }}
+      version: ${{ steps.v.outputs.version }}
     steps:
       - id: p
         run: |
           p="${{ inputs.platforms }}"; [ -n "$p" ] || p="rpi-armhf rpi-arm64 pcusb"
           echo "json=$(printf '%s\n' $p | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+      - id: v
+        run: |
+          v="${{ inputs.version }}"
+          if [ -z "$v" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="$GITHUB_REF_NAME"; fi
+          [ -n "$v" ] || { echo "no version: push a v* tag, or pass workflow_dispatch's version input" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
 
   assemble:
     needs: plan
@@ -54,8 +63,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
-      - name: Assemble ${{ matrix.platform }} @ ${{ inputs.version }}
-        run: bash assemble.sh "${{ matrix.platform }}" "${{ inputs.version }}"
+      - name: Assemble ${{ matrix.platform }} @ ${{ needs.plan.outputs.version }}
+        run: bash assemble.sh "${{ matrix.platform }}" "${{ needs.plan.outputs.version }}"
       - uses: actions/upload-artifact@v7
         with:
           name: payload-${{ matrix.platform }}
