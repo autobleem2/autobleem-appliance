@@ -108,6 +108,13 @@ jobs:
         with:
           name: payload-${{ matrix.platform }}
           path: dist
+      # the site-publish tooling (repo_publish.sh + its page-generator merge), only needed on a real
+      # release - a separate checkout since it split into its own repo (autobleem-repo).
+      - uses: actions/checkout@v7
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          repository: autobleem2/autobleem-repo
+          path: autobleem-repo-tools
       - id: which
         run: |
           case "${{ matrix.platform }}" in
@@ -191,6 +198,32 @@ jobs:
           name: image-${{ matrix.platform }}
           path: build_image/out/*
           retention-days: 30
+      # push straight onto the real site (autobleem.retromenele.pl), only for a real release. --local:
+      # this runner IS the build server, so it's a plain filesystem copy into REPO_DIR - no ssh, no gh CLI
+      # (never installed on the server on purpose). Also bind-mounts REPO_DIR itself into the sibling
+      # container, since that's what --local writes into directly.
+      - name: Publish the image to the site
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          AB_REPO_DIR: /home/claude/autobleem-repo
+        run: |
+          set -euo pipefail
+          case "${{ steps.which.outputs.kind }}" in
+            rpi)
+              docker run --rm \
+                -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                ghcr.io/autobleem2/autobleem-build:latest \
+                bash autobleem-repo-tools/tools/repo_publish.sh --local image \
+                  "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz build_image/out/rpi_imager_repo.json
+              ;;
+            pcusb)
+              docker run --rm \
+                -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                ghcr.io/autobleem2/autobleem-build:latest \
+                bash autobleem-repo-tools/tools/repo_publish.sh --local pc-image \
+                  "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz
+              ;;
+          esac
 
   release:
     # image is in needs so its artifacts are available when it ran, but it's gated off until a self-hosted
