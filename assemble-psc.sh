@@ -41,11 +41,13 @@ for need in 028c18a9-ec4b-4632-b2cf-d4e20f252e8f/LUPDATA.BIN Autobleem/start.sh 
     [ -e "$STAGE/$need" ] || { echo "launcher-psc lacks $need - an artifact from before the psc skeleton?" >&2; exit 1; }
 done
 
-# 2. the console tools (autobleem2/autobleem-console-tools): the tarball's root is Apps/ - pscbios and
-#    abflashkit, abflashkit with its kernel/ flash payload
+# 2. the console tools (autobleem2/autobleem-console-tools): Extensions/pscbios/ - PSC-Bios, an extension of
+#    the launcher since 2026-09-24 (bin/psc/pscbios.so, run from Hardware Information) - and Apps/abflashkit/,
+#    an App, with its kernel/ flash payload. A release from before that has Apps/pscbios/ instead.
 fetch_release_assets autobleem2/autobleem-console-tools "$VERSION" "console-tools-psc-*.tar.gz" "$dl"
 tar -xzf "$dl"/console-tools-psc-*.tar.gz -C "$STAGE"
 [ -s "$STAGE/Apps/abflashkit/kernel/boot.img" ] || { echo "console-tools-psc lacks Apps/abflashkit/kernel/boot.img" >&2; exit 1; }
+[ -s "$STAGE/Extensions/pscbios/bin/psc/pscbios.so" ] || [ -s "$STAGE/Apps/pscbios/pscbios" ] || { echo "console-tools-psc lacks PSC-Bios" >&2; exit 1; }
 
 # 3. the two PS1 emulators - PUBLISHED artifacts, fetched not built; pcsx-ab -> bin/emu, pcsx-abnxt -> bin/emunxt
 fetch_release_assets autobleem2/pcsx-ab    "$VERSION" "pcsx-ab-*-psc.tar.gz"    "$dl"
@@ -66,7 +68,7 @@ find "$STAGE" -type f -name placeholder -delete
 chmod +x "$STAGE/Autobleem/bin/autobleem/autobleem-gui" "$STAGE/Autobleem/bin/autobleem/absplash" \
          "$STAGE/Autobleem/bin/autobleem/abfatflag" "$STAGE/Autobleem/bin/autobleem/abupdate" 2>/dev/null || true
 chmod +x "$STAGE"/Autobleem/*.sh "$STAGE"/Autobleem/rc/*.sh 2>/dev/null || true
-chmod +x "$STAGE"/Apps/*/*.sh "$STAGE"/Apps/pscbios/pscbios "$STAGE"/Apps/abflashkit/abflashkit 2>/dev/null || true
+chmod +x "$STAGE"/Apps/*/*.sh "$STAGE"/Extensions/pscbios/bt "$STAGE"/Apps/abflashkit/abflashkit 2>/dev/null || true
 chmod +x "$STAGE"/Autobleem/bin/abpad/abpadd 2>/dev/null || true
 chmod +x "$STAGE"/Autobleem/bin/emu/pcsx-ab "$STAGE"/Autobleem/bin/emunxt/pcsx-ab 2>/dev/null || true
 
