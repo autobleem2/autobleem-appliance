@@ -15,6 +15,12 @@ app.ini fields, file count, size and the sha256 of every file; tools/repo_publis
 on the download repository (psc/apps/, the newest date kept). pscbios and abflashkit are skipped - they
 ship with every release.
 
+--per-app (the AutoBleem Store's catalog, the launcher's docs/store-plan.md step 6) writes one Store item per
+app instead: <name>-psc-<date>.zip (the app's folder, <name>/..., which the Store's AppInstaller merges into
+Apps/<name>/), <name>.item.json (id app/<name>, kind app, title, author, version = the date, a description,
+requires pack/psc-libs) and the app's picture as <name>.<ext> when it has one. `tools/repo_publish.sh store psc
+<the files>` (autobleem-repo) puts them in store/psc/, and its index writes the catalog.
+
 Only the standard library is needed.
 """
 import argparse
@@ -25,6 +31,7 @@ import json
 import os
 import sys
 import tarfile
+import zipfile
 
 OURS = {"pscbios", "abflashkit"}  # built here, in every release package
 
@@ -54,6 +61,7 @@ def main():
     ap.add_argument("--out", default="dist/release")
     ap.add_argument("--date", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d"))
     ap.add_argument("--only", nargs="*", help="pack only these app folders")
+    ap.add_argument("--per-app", action="store_true", help="one Store item per app (zip + item.json + picture)")
     args = ap.parse_args()
 
     apps = []
@@ -70,6 +78,8 @@ def main():
         sys.exit("no apps found under %s" % args.apps_dir)
 
     os.makedirs(args.out, exist_ok=True)
+    if args.per_app:
+        return per_app(apps, args)
     tar_name = "apps-psc-%s.tar.gz" % args.date
     tar_path = os.path.join(args.out, tar_name)
     entries = []
@@ -108,6 +118,44 @@ def main():
         json.dump(manifest, f, indent=2, ensure_ascii=False)
         f.write("\n")
     print("%s: %d apps, %.1f MB" % (tar_path, len(entries), os.path.getsize(tar_path) / 1e6))
+
+
+def per_app(apps, args):
+    """one Store item per app: <name>-psc-<date>.zip, <name>.item.json and its picture"""
+    for name, folder, ini in apps:
+        zip_name = "%s-psc-%s.zip" % (name, args.date)
+        zip_path = os.path.join(args.out, zip_name)
+        count = 0
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+            for root, dirs, names in os.walk(folder):
+                dirs.sort()
+                for fn in sorted(names):
+                    if fn.startswith("._") or fn == ".DS_Store":
+                        continue
+                    path = os.path.join(root, fn)
+                    rel = os.path.relpath(path, folder).replace(os.sep, "/")
+                    info = zipfile.ZipInfo("%s/%s" % (name, rel), date_time=(2026, 1, 1, 0, 0, 0))
+                    mode = 0o755 if rel.endswith(".sh") or "." not in fn else 0o644
+                    info.external_attr = (0o100000 | mode) << 16
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    with open(path, "rb") as f:
+                        z.writestr(info, f.read())
+                    count += 1
+        item = {"id": "app/" + name, "kind": "app", "title": ini.get("title", name), "version": args.date,
+                "description": "For the PlayStation Classic - one of RetroBoot 1.2's apps, made self-contained",
+                "files": [{"name": zip_name}], "requires": ["pack/psc-libs"]}
+        if ini.get("author"):
+            item["author"] = ini["author"]
+        image = ini.get("image", "")
+        if image and os.path.isfile(os.path.join(folder, image)):
+            picture = name + os.path.splitext(image)[1].lower()
+            with open(os.path.join(folder, image), "rb") as src, open(os.path.join(args.out, picture), "wb") as dst:
+                dst.write(src.read())
+            item["image"] = picture
+        with open(os.path.join(args.out, name + ".item.json"), "w", encoding="utf-8") as f:
+            json.dump(item, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        print("  %-14s %-40s %4d files %6.1f MB" % (name, item["title"], count, os.path.getsize(zip_path) / 1e6))
 
 
 if __name__ == "__main__":
