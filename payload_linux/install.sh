@@ -1527,6 +1527,13 @@ install_service() {
     sed "s|@DATA_MOUNT@|$DATA_MOUNT|g" "$SCRIPT_DIR/system/autobleem.service" \
         | write_file /etc/systemd/system/autobleem.service
 
+    # The system journal in RAM (the launcher's docs/quiet-stick-plan.md): the session's output goes to it
+    # line by line, and a persistent journal is a write per line to the SD card or stick. What a crash left
+    # is kept anyway - rc/ab_log.sh copies the run's logs to System/Logs/crash-<n>.
+    run mkdir -p /etc/systemd/journald.conf.d
+    printf '[Journal]\nStorage=volatile\n' | write_file /etc/systemd/journald.conf.d/autobleem.conf
+    run systemctl restart systemd-journald || true
+
     # tty1 is the launcher's screen; a getty there would fight it for the terminal and the keyboard.
     # tty2..tty6 are untouched, so Alt+F2 still gives a login prompt if the launcher ever fails to start.
     # (it may already be disabled, or never have been enabled - neither is a reason to stop)
