@@ -6,7 +6,7 @@
 # rationale), just sourcing every piece from a release artifact instead of a local build directory. Also
 # writes the two Windows downloads that belong to the same release: AutoBleemInstaller-<v>.zip (the
 # installer, what a console user downloads - it fetches this tarball from the channel picked in it) and
-# UpdateRoms-<v>.zip (step 5).
+# UpdateRoms-<v>.zip (step 5), the first with LastResortRecovery/ inside.
 #
 # This tarball is deliberately NOT self-contained: no RetroArch/ and no cover databases
 # (Autobleem/bin/db/), same as make_psc_package.sh's tarball branch - AutoBleemInstaller.exe
@@ -84,10 +84,14 @@ find "$STAGE" -maxdepth 2 -type d | sed "s#$STAGE/##"
 #      "installer" kind, the console's download; the package comes from the channel chosen in it
 #    UpdateRoms-<v>.zip = UpdateRoms/{UpdateRoms.exe,README.txt} - the installer puts it on every stick,
 #      taking it from the release whose psc-fs is its own package, so it has to be published with this one
+#    and inside the installer's zip, AutoBleemInstaller/LastResortRecovery/ (2026-09-24, the owner's call):
+#      a console that no longer starts, its LBOOT.EPB written back over fastboot - whoever downloads the
+#      console's installer has the last resort with it (the exe, its README, Google's platform-tools/)
 fetch_release_assets autobleem2/autobleem-pc-tools "$VERSION" "pc-tools-win64-*.zip" "$dl"
 win="$work/win"; mkdir -p "$win"
 unzip -q "$dl"/pc-tools-win64-*.zip -d "$win"
-for need in AutoBleemInstaller/AutoBleemInstaller.exe UpdateRoms/UpdateRoms.exe; do
+for need in AutoBleemInstaller/AutoBleemInstaller.exe UpdateRoms/UpdateRoms.exe \
+            LastResortRecovery/LastResortRecovery.exe LastResortRecovery/platform-tools/fastboot.exe; do
     [ -s "$win/$need" ] || { echo "pc-tools-win64 lacks $need" >&2; exit 1; }
 done
 # VERSION next to the program: Env::productVersion() reads it, so its window and log show this release's
@@ -95,7 +99,10 @@ done
 # (the installer copies UpdateRoms/ onto the stick whole, VERSION with it)
 printf '%s\n' "$VERSION" > "$win/AutoBleemInstaller/VERSION"
 printf '%s\n' "$VERSION" > "$win/UpdateRoms/VERSION"
-# the installer is the exe and its README only (2026-09-23, the owner's call): it downloads the stick
+printf '%s\n' "$VERSION" > "$win/LastResortRecovery/VERSION"
+cp -a "$win/LastResortRecovery" "$win/AutoBleemInstaller/"
+# the installer is the exe and its README only - plus LastResortRecovery/ above (2026-09-23, the owner's
+# call): it downloads the stick
 # package - the tarball above, published as this release's psc-fs - and UpdateRoms from the channel the
 # user picks in it, so neither rides in its zip any more
 mkzip() { # mkzip OUT PARENT TOP - OUT holds PARENT/TOP as TOP/...
