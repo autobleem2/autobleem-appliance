@@ -7,9 +7,9 @@ set -euo pipefail
 PLATFORM="${1:?platform}"; VERSION="${2:?version}"
 . "$(dirname "$0")/tools/release_assets.sh"
 case "$PLATFORM" in
-  rpi-armhf) EMU=rpi-armhf; TOP=autobleem-rpi ;;
-  rpi-arm64) EMU=rpi-arm64; TOP=autobleem-rpi ;;
-  pcusb)     EMU=pcusb;     TOP=autobleem-pcusb ;;
+  rpi-armhf) EMU=rpi-armhf; TOP=autobleem-rpi;   KEYS="rpi linux-armhf" ;;
+  rpi-arm64) EMU=rpi-arm64; TOP=autobleem-rpi;   KEYS="rpi64 linux-arm64" ;;
+  pcusb)     EMU=pcusb;     TOP=autobleem-pcusb; KEYS="pcusb linux-i386" ;;
   *) echo "platform: rpi-armhf|rpi-arm64|pcusb" >&2; exit 2 ;;
 esac
 work="$(mktemp -d)"; STAGE="$work/$TOP"; mkdir -p "$STAGE"
@@ -31,6 +31,10 @@ tar -xzf "$dl"/pcsx-abnxt-*-"$EMU".tar.gz -C "$STAGE/Autobleem/bin/emunxt"
 #    which stay in the launcher repo - no theme pack), so it extracts straight over the payload.
 fetch_release_assets autobleem2/autobleem "$VERSION" "launcher-$PLATFORM-*.tar.gz" "$dl"
 tar -xzf "$dl"/launcher-"$PLATFORM"-*.tar.gz -C "$STAGE"
+# the bundled scanner processors - install.sh copies processors/<name>/ into System/Processors/ (not
+# System/ in the package: payload_linux already has system/, and a case-insensitive filesystem cannot hold both)
+# shellcheck disable=SC2086 - KEYS is a list on purpose
+stage_processor autobleem2/proc_unzip unzip "$STAGE/processors" $KEYS
 # the package's version: install.sh puts it on the data partition, where the launcher's update check reads
 # it (Env::productVersion), and the image builders name the image after it
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"

@@ -57,6 +57,10 @@ mkdir -p "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 tar -xzf "$dl"/pcsx-ab-*-psc.tar.gz    -C "$STAGE/Autobleem/bin/emu"
 tar -xzf "$dl"/pcsx-abnxt-*-psc.tar.gz -C "$STAGE/Autobleem/bin/emunxt"
 
+# the bundled scanner processors (the launcher's docs/scanner-processors-plan.md) - the stick's own layout;
+# AutoBleemInstaller lays the package over the stick, so an update brings the new program and the user's
+# System/Processors/sequence.ini (order, on/off) is left as it is
+stage_processor autobleem2/proc_unzip unzip "$STAGE/System/Processors" psc
 # 4. VERSION file (tools/make_psc_package.sh's / tools/make_rpi_package.sh's rule: the tag as given - this
 #    assembler only ever runs against a real published version, so no dirty/hash fallback is needed here).
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"

@@ -23,3 +23,37 @@ fetch_release_assets() {
     done < <(gh api --paginate "repos/$repo/releases/$id/assets" --jq '.[] | "\(.id)\t\(.name)"')
     [ "$n" -gt 0 ] || { echo "no asset matching $glob in $repo@$tag" >&2; return 1; }
 }
+
+# stage_processor REPO NAME DEST KEY... - a scanner processor bundled with every package (the launcher's
+# docs/scanner-processors-plan.md; proc_unzip, the owner 2026-09-25: a processor ships, an extension does not):
+# its package <NAME>-<v>.zip (the folder NAME/ with processor.ini and bin/<key>/ for every platform) unpacked to
+# DEST/NAME/, keeping only the bin/<key>/ folders given. A processor has versions of its own, not the unified
+# one: a development build (AB_SOURCE_TAG=nightly) takes its rolling `nightly`, a release its latest v* release
+# - or its nightly while it has none yet.
+stage_processor() {
+    local repo="$1" name="$2" dest="$3" tag tmp
+    shift 3
+    tag="${AB_SOURCE_TAG:-}"
+    if [ -z "$tag" ]; then
+        # (a 404 prints its JSON on stdout: the output counts only when the call succeeded)
+        tag="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null)" || tag=""
+        [ -n "$tag" ] || { tag=nightly; echo "    $repo has no release yet - its nightly is bundled"; }
+    fi
+    tmp="$(mktemp -d)"
+    AB_SOURCE_TAG="$tag" fetch_release_assets "$repo" "$tag" "$name-*.zip" "$tmp" || return 1
+    mkdir -p "$dest"
+    rm -rf "${dest:?}/$name"
+    unzip -q "$tmp"/"$name"-*.zip -d "$dest"
+    [ -f "$dest/$name/processor.ini" ] || { echo "$repo's package lacks $name/processor.ini" >&2; return 1; }
+    local key keep bin
+    for bin in "$dest/$name"/bin/*/; do
+        key="$(basename "$bin")"
+        keep=0
+        for k in "$@"; do [ "$k" = "$key" ] && keep=1; done
+        [ "$keep" = 1 ] || rm -rf "$bin"
+    done
+    ls "$dest/$name/bin" | grep -q . || { echo "$repo's package has no binary for $*" >&2; return 1; }
+    chmod +x "$dest/$name"/bin/*/* 2>/dev/null || true
+    rm -rf "$tmp"
+    echo "    bundled $name ($repo@$tag) for $*"
+}

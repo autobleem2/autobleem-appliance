@@ -49,6 +49,9 @@ done
 
 # 3. the setup helper (autobleem-pc-tools' pc-tools-win64 asset: AutoBleemWinSetup/AutoBleemWinSetup.exe,
 #    Release, static, stripped, packed)
+# the bundled scanner processors: Processors/ in the program folder; AutoBleemWinSetup (core's WindowsInstallJob)
+# copies them into the data tree's System/Processors/ on every install and update
+stage_processor autobleem2/proc_unzip unzip "$APP/Processors" windows-x86_64
 fetch_release_assets autobleem2/autobleem-pc-tools "$VERSION" "pc-tools-win64-*.zip" "$dl"
 unzip -q "$dl"/pc-tools-win64-*.zip -d "$work/pc"
 [ -s "$work/pc/AutoBleemWinSetup/AutoBleemWinSetup.exe" ] || { echo "pc-tools-win64 lacks AutoBleemWinSetup.exe" >&2; exit 1; }

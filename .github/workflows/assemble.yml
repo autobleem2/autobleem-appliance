@@ -100,7 +100,7 @@ jobs:
           echo "source_tag=nightly" >> "$GITHUB_OUTPUT"
           # what every component's nightly pre-release holds now: name, size and upload time of each asset
           fp=""
-          for r in autobleem pcsx-ab pcsx-abnxt autobleem-console-tools autobleem-pc-tools; do
+          for r in autobleem pcsx-ab pcsx-abnxt autobleem-console-tools autobleem-pc-tools proc_unzip; do
             id="$(gh api "repos/autobleem2/$r/releases/tags/nightly" --jq .id 2>/dev/null || true)"
             [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::autobleem2/$r has no nightly pre-release yet (its develop CI makes it)"; exit 1; }
             fp+="$(gh api --paginate "repos/autobleem2/$r/releases/$id/assets" --jq '.[] | "'"$r"' \(.name) \(.size) \(.updated_at)"' | sort)"$'\n'
