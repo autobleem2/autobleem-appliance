@@ -7,9 +7,9 @@ set -euo pipefail
 PLATFORM="${1:?platform}"; VERSION="${2:?version}"
 . "$(dirname "$0")/tools/release_assets.sh"
 case "$PLATFORM" in
-  rpi-armhf) EMU=rpi-armhf; TOP=autobleem-rpi;   KEYS="rpi linux-armhf" ;;
-  rpi-arm64) EMU=rpi-arm64; TOP=autobleem-rpi;   KEYS="rpi64 linux-arm64" ;;
-  pcusb)     EMU=pcusb;     TOP=autobleem-pcusb; KEYS="pcusb linux-i386" ;;
+  rpi-armhf) EMU=rpi-armhf; TOP=autobleem-rpi;   KEYS="rpi linux-armhf";   EXT=rpi ;;
+  rpi-arm64) EMU=rpi-arm64; TOP=autobleem-rpi;   KEYS="rpi64 linux-arm64"; EXT=rpi64 ;;
+  pcusb)     EMU=pcusb;     TOP=autobleem-pcusb; KEYS="pcusb linux-i386";  EXT=pcusb ;;
   *) echo "platform: rpi-armhf|rpi-arm64|pcusb" >&2; exit 2 ;;
 esac
 work="$(mktemp -d)"; STAGE="$work/$TOP"; mkdir -p "$STAGE"
@@ -35,6 +35,9 @@ tar -xzf "$dl"/launcher-"$PLATFORM"-*.tar.gz -C "$STAGE"
 # System/ in the package: payload_linux already has system/, and a case-insensitive filesystem cannot hold both)
 # shellcheck disable=SC2086 - KEYS is a list on purpose
 stage_processor autobleem2/proc_unzip unzip "$STAGE/processors" $KEYS
+# the bundled extension, the AutoBleem Store (the owner, 2026-09-25) - install.sh copies extensions/<name>/ into
+# the data partition's Extensions/ on every install and update
+stage_extension autobleem2/ext_store store "$EXT" "$STAGE/extensions" "$STAGE/Autobleem/bin/autobleem/autobleem-gui"
 # the package's version: install.sh puts it on the data partition, where the launcher's update check reads
 # it (Env::productVersion), and the image builders name the image after it
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"

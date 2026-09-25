@@ -52,6 +52,9 @@ done
 # the bundled scanner processors: Processors/ in the program folder; AutoBleemWinSetup (core's WindowsInstallJob)
 # copies them into the data tree's System/Processors/ on every install and update
 stage_processor autobleem2/proc_unzip unzip "$APP/Processors" windows-x86_64
+# the bundled extension, the AutoBleem Store (the owner, 2026-09-25): Extensions/ in the program folder;
+# AutoBleemWinSetup (core's WindowsInstallJob) copies it into the data tree's Extensions/ on every install and update
+stage_extension autobleem2/ext_store store win "$APP/Extensions" "$APP/autobleem-gui.exe"
 fetch_release_assets autobleem2/autobleem-pc-tools "$VERSION" "pc-tools-win64-*.zip" "$dl"
 unzip -q "$dl"/pc-tools-win64-*.zip -d "$work/pc"
 [ -s "$work/pc/AutoBleemWinSetup/AutoBleemWinSetup.exe" ] || { echo "pc-tools-win64 lacks AutoBleemWinSetup.exe" >&2; exit 1; }

@@ -61,6 +61,9 @@ tar -xzf "$dl"/pcsx-abnxt-*-psc.tar.gz -C "$STAGE/Autobleem/bin/emunxt"
 # AutoBleemInstaller lays the package over the stick, so an update brings the new program and the user's
 # System/Processors/sequence.ini (order, on/off) is left as it is
 stage_processor autobleem2/proc_unzip unzip "$STAGE/System/Processors" psc
+# the bundled extension, the AutoBleem Store (the owner, 2026-09-25), in the stick's own layout next to PSC-Bios;
+# an update (AutoBleemInstaller, abupdate) replaces the folder whole
+stage_extension autobleem2/ext_store store psc "$STAGE/Extensions" "$STAGE/Autobleem/bin/autobleem/autobleem-gui"
 # 4. VERSION file (tools/make_psc_package.sh's / tools/make_rpi_package.sh's rule: the tag as given - this
 #    assembler only ever runs against a real published version, so no dirty/hash fallback is needed here).
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"

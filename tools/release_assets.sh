@@ -25,7 +25,7 @@ fetch_release_assets() {
 }
 
 # stage_processor REPO NAME DEST KEY... - a scanner processor bundled with every package (the launcher's
-# docs/scanner-processors-plan.md; proc_unzip, the owner 2026-09-25: a processor ships, an extension does not):
+# docs/scanner-processors-plan.md; proc_unzip, the owner 2026-09-25):
 # its package <NAME>-<v>.zip (the folder NAME/ with processor.ini and bin/<key>/ for every platform) unpacked to
 # DEST/NAME/, keeping only the bin/<key>/ folders given. A processor has versions of its own, not the unified
 # one: a development build (AB_SOURCE_TAG=nightly) takes its rolling `nightly`, a release its latest v* release
@@ -56,4 +56,42 @@ stage_processor() {
     chmod +x "$dest/$name"/bin/*/* 2>/dev/null || true
     rm -rf "$tmp"
     echo "    bundled $name ($repo@$tag) for $*"
+}
+
+# stage_extension REPO NAME KEY DEST [LAUNCHER] - an extension every package ships (the AutoBleem Store - the
+# owner, 2026-09-25; it was a separate download): its package <repo name>-<KEY>-<v>.zip (Extensions/<NAME>/
+# inside, bin/<KEY>/ only) unpacked to DEST/<NAME>/. Versions of its own, as a processor has: a development
+# build (AB_SOURCE_TAG=nightly) takes the rolling `nightly`, a release its latest v* release - or its nightly
+# while it has none yet. LAUNCHER, the binary it will be loaded into: their SDK stamps (AB_SDK_STAMP -
+# "sdk=3;cxx=gcc-12;cxx11abi=1;target=win") must be the same, or the launcher would refuse the plugin at run
+# time; a packed (UPX) launcher hides its stamp, and then only the plugin's own target is checked.
+stage_extension() {
+    local repo="$1" name="$2" key="$3" dest="$4" launcher="${5:-}" tag tmp plugin stamp theirs
+    tag="${AB_SOURCE_TAG:-}"
+    if [ -z "$tag" ]; then
+        tag="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null)" || tag=""
+        [ -n "$tag" ] || { tag=nightly; echo "    $repo has no release yet - its nightly is bundled"; }
+    fi
+    tmp="$(mktemp -d)"
+    AB_SOURCE_TAG="$tag" fetch_release_assets "$repo" "$tag" "${repo##*/}-$key-*.zip" "$tmp" || return 1
+    unzip -q "$tmp/${repo##*/}-$key-"*.zip -d "$tmp/x"
+    [ -f "$tmp/x/Extensions/$name/extension.ini" ] || { echo "$repo's $key package lacks Extensions/$name/extension.ini" >&2; return 1; }
+    plugin="$(ls "$tmp/x/Extensions/$name/bin/$key/$name".* 2>/dev/null | head -1)"
+    [ -n "$plugin" ] || { echo "$repo's $key package has no bin/$key/$name plugin" >&2; return 1; }
+    stamp="$(grep -aoE 'sdk=[0-9]+;cxx=[a-z]+-[0-9]+;cxx11abi=[-0-9]+;target=[a-z0-9]+' "$plugin" | head -1)"
+    [ -n "$stamp" ] || { echo "$plugin has no SDK stamp - not an extension?" >&2; return 1; }
+    [ "${stamp##*target=}" = "$key" ] || { echo "$plugin is built for ${stamp##*target=}, not $key" >&2; return 1; }
+    if [ -n "$launcher" ]; then
+        theirs="$(grep -aoE 'sdk=[0-9]+;cxx=[a-z]+-[0-9]+;cxx11abi=[-0-9]+;target=[a-z0-9]+' "$launcher" | head -1 || true)"
+        if [ -n "$theirs" ] && [ "$theirs" != "$stamp" ]; then
+            echo "$repo@$tag's plugin ($stamp) does not fit the launcher ($theirs) - rebuild $repo against it" >&2
+            return 1
+        fi
+        [ -n "$theirs" ] || echo "    (the launcher's SDK stamp is not readable - a packed binary; the plugin's is $stamp)"
+    fi
+    mkdir -p "$dest"
+    rm -rf "${dest:?}/$name"
+    mv "$tmp/x/Extensions/$name" "$dest/$name"
+    rm -rf "$tmp"
+    echo "    bundled the $name extension ($repo@$tag, $stamp)"
 }
