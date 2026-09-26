@@ -27,11 +27,12 @@ fetch_release_assets() {
 # stage_processor REPO NAME DEST KEY... - a scanner processor bundled with every package (the launcher's
 # docs/scanner-processors-plan.md; proc_unzip, the owner 2026-09-25):
 # its package <NAME>-<v>.zip (the folder NAME/ with processor.ini and bin/<key>/ for every platform) unpacked to
-# DEST/NAME/, keeping only the bin/<key>/ folders given. A processor has versions of its own, not the unified
-# one: a development build (AB_SOURCE_TAG=nightly) takes its rolling `nightly`; a release (AB_SOURCE_TAG unset)
-# takes its latest v* release - which release.py's STAGES now tags for every promotion (R3, 2026-09-26), so a
-# missing v* release in a release build is an error, not a silent nightly fallback (todo R3: the appliance used
-# to bundle the nightly into a tagged release when the repo had none yet).
+# DEST/NAME/, keeping only the bin/<key>/ folders given. A processor keeps a version of its own, not the
+# unified one - release.py never tags it (Eleanor's call on R3, 2026-09-26; docs/decisions.md): a development
+# build (AB_SOURCE_TAG=nightly) takes its rolling `nightly`; a release (AB_SOURCE_TAG unset) takes its latest
+# v* release, which `release.py promote` now refuses to start without (it checks the repo has one before
+# tagging anything else), so a missing v* release here is an error, not a silent nightly fallback (todo R3:
+# the appliance used to bundle the nightly into a tagged release when the repo had none yet).
 stage_processor() {
     local repo="$1" name="$2" dest="$3" tag tmp
     shift 3
@@ -62,10 +63,11 @@ stage_processor() {
 
 # stage_extension REPO NAME KEY DEST [LAUNCHER] - an extension every package ships (the AutoBleem Store - the
 # owner, 2026-09-25; it was a separate download): its package <repo name>-<KEY>-<v>.zip (Extensions/<NAME>/
-# inside, bin/<KEY>/ only) unpacked to DEST/<NAME>/. Versions of its own, as a processor has: a development
-# build (AB_SOURCE_TAG=nightly) takes the rolling `nightly`; a release (AB_SOURCE_TAG unset) takes its latest
-# v* release - which release.py's STAGES now tags for every promotion (R3, 2026-09-26), so a missing v* release
-# in a release build is an error, not a silent nightly fallback. LAUNCHER, the binary it will be loaded into:
+# inside, bin/<KEY>/ only) unpacked to DEST/<NAME>/. Keeps a version of its own, as a processor does - never
+# tagged by release.py (Eleanor's call on R3, 2026-09-26; docs/decisions.md): a development build
+# (AB_SOURCE_TAG=nightly) takes the rolling `nightly`; a release (AB_SOURCE_TAG unset) takes its latest v*
+# release, which `release.py promote` now refuses to start without, so a missing v* release here is an error,
+# not a silent nightly fallback. LAUNCHER, the binary it will be loaded into:
 # their SDK stamps (AB_SDK_STAMP - "sdk=3;cxx=gcc-12;cxx11abi=1;target=win") must be the same, or the launcher
 # would refuse the plugin at run time; a packed (UPX) launcher hides its stamp, and then only the plugin's own
 # target is checked.
