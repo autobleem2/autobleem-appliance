@@ -66,7 +66,7 @@ stage_processor() {
 # "sdk=3;cxx=gcc-12;cxx11abi=1;target=win") must be the same, or the launcher would refuse the plugin at run
 # time; a packed (UPX) launcher hides its stamp, and then only the plugin's own target is checked.
 stage_extension() {
-    local repo="$1" name="$2" key="$3" dest="$4" launcher="${5:-}" tag tmp plugin stamp theirs
+    local repo="$1" name="$2" key="$3" dest="$4" launcher="${5:-}" tag tmp stamp
     tag="${AB_SOURCE_TAG:-}"
     if [ -z "$tag" ]; then
         tag="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null)" || tag=""
@@ -76,22 +76,52 @@ stage_extension() {
     AB_SOURCE_TAG="$tag" fetch_release_assets "$repo" "$tag" "${repo##*/}-$key-*.zip" "$tmp" || return 1
     unzip -q "$tmp/${repo##*/}-$key-"*.zip -d "$tmp/x"
     [ -f "$tmp/x/Extensions/$name/extension.ini" ] || { echo "$repo's $key package lacks Extensions/$name/extension.ini" >&2; return 1; }
-    plugin="$(ls "$tmp/x/Extensions/$name/bin/$key/$name".* 2>/dev/null | head -1)"
-    [ -n "$plugin" ] || { echo "$repo's $key package has no bin/$key/$name plugin" >&2; return 1; }
+    stamp="$(check_extension_stamp "$tmp/x/Extensions/$name" "$name" "$key" "$launcher" "$repo@$tag")" || return 1
+    mkdir -p "$dest"
+    rm -rf "${dest:?}/$name"
+    mv "$tmp/x/Extensions/$name" "$dest/$name"
+    rm -rf "$tmp"
+    echo "    bundled the $name extension ($repo@$tag, $stamp)"
+}
+
+# check_extension_stamp FOLDER NAME KEY LAUNCHER WHAT - FOLDER (an Extensions/<NAME>/) has a bin/<KEY>/<NAME>
+# plugin whose SDK stamp names target KEY and, when LAUNCHER is given and readable, is the launcher's own
+# stamp; prints the stamp. WHAT names the source in the messages ("repo@tag").
+check_extension_stamp() {
+    local folder="$1" name="$2" key="$3" launcher="$4" what="$5" plugin stamp theirs
+    plugin="$(ls "$folder/bin/$key/$name".* 2>/dev/null | head -1)"
+    [ -n "$plugin" ] || { echo "$what has no bin/$key/$name plugin" >&2; return 1; }
     stamp="$(grep -aoE 'sdk=[0-9]+;cxx=[a-z]+-[0-9]+;cxx11abi=[-0-9]+;target=[a-z0-9]+' "$plugin" | head -1)"
     [ -n "$stamp" ] || { echo "$plugin has no SDK stamp - not an extension?" >&2; return 1; }
     [ "${stamp##*target=}" = "$key" ] || { echo "$plugin is built for ${stamp##*target=}, not $key" >&2; return 1; }
     if [ -n "$launcher" ]; then
         theirs="$(grep -aoE 'sdk=[0-9]+;cxx=[a-z]+-[0-9]+;cxx11abi=[-0-9]+;target=[a-z0-9]+' "$launcher" | head -1 || true)"
         if [ -n "$theirs" ] && [ "$theirs" != "$stamp" ]; then
-            echo "$repo@$tag's plugin ($stamp) does not fit the launcher ($theirs) - rebuild $repo against it" >&2
+            echo "$what's plugin ($stamp) does not fit the launcher ($theirs) - rebuild it against the launcher" >&2
             return 1
         fi
-        [ -n "$theirs" ] || echo "    (the launcher's SDK stamp is not readable - a packed binary; the plugin's is $stamp)"
+        [ -n "$theirs" ] || echo "    (the launcher's SDK stamp is not readable - a packed binary; the plugin's is $stamp)" >&2
     fi
+    printf '%s\n' "$stamp"
+}
+
+# stage_console_tools_extension KEY VERSION DEST [LAUNCHER] - PSC-Bios for a Pi or the PC stick (its Network &
+# Controllers screens, over NetworkManager and BlueZ - 2026-09-26): autobleem-console-tools' package
+# console-tools-<KEY>-<v>.tar.gz (Extensions/pscbios/ inside, bin/<KEY>/ only) unpacked to DEST/pscbios/.
+# The console tools carry the unified version, so VERSION (or AB_SOURCE_TAG=nightly) picks the release, as
+# for the launcher; the same SDK-stamp check as stage_extension.
+stage_console_tools_extension() {
+    local key="$1" version="$2" dest="$3" launcher="${4:-}" repo=autobleem2/autobleem-console-tools tmp stamp
+    tmp="$(mktemp -d)"
+    fetch_release_assets "$repo" "$version" "console-tools-$key-*.tar.gz" "$tmp" || return 1
+    mkdir -p "$tmp/x"
+    tar -xzf "$tmp"/console-tools-"$key"-*.tar.gz -C "$tmp/x"
+    [ -f "$tmp/x/Extensions/pscbios/extension.ini" ] || { echo "console-tools-$key lacks Extensions/pscbios/extension.ini" >&2; return 1; }
+    stamp="$(check_extension_stamp "$tmp/x/Extensions/pscbios" pscbios "$key" "$launcher" "console-tools-$key")" || return 1
+    chmod +x "$tmp/x/Extensions/pscbios/bt" 2>/dev/null || true
     mkdir -p "$dest"
-    rm -rf "${dest:?}/$name"
-    mv "$tmp/x/Extensions/$name" "$dest/$name"
+    rm -rf "${dest:?}/pscbios"
+    mv "$tmp/x/Extensions/pscbios" "$dest/pscbios"
     rm -rf "$tmp"
-    echo "    bundled the $name extension ($repo@$tag, $stamp)"
+    echo "    bundled the pscbios extension ($repo@${AB_SOURCE_TAG:-$version}, $stamp)"
 }

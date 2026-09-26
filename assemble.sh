@@ -38,6 +38,9 @@ stage_processor autobleem2/proc_unzip unzip "$STAGE/processors" $KEYS
 # the bundled extension, the AutoBleem Store (the owner, 2026-09-25) - install.sh copies extensions/<name>/ into
 # the data partition's Extensions/ on every install and update
 stage_extension autobleem2/ext_store store "$EXT" "$STAGE/extensions" "$STAGE/Autobleem/bin/autobleem/autobleem-gui"
+# and PSC-Bios (2026-09-26): the System menu's Network & Controllers - Wi-Fi, the time zone, Bluetooth pads and
+# the mapping wizard - over NetworkManager and BlueZ; from the console tools' release of the same version
+stage_console_tools_extension "$EXT" "$VERSION" "$STAGE/extensions" "$STAGE/Autobleem/bin/autobleem/autobleem-gui"
 # the package's version: install.sh puts it on the data partition, where the launcher's update check reads
 # it (Env::productVersion), and the image builders name the image after it
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
