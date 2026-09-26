@@ -33,6 +33,20 @@
 # publish-nightly, publishes sources.json and indexes once every piece is there, and only then does the new
 # build replace the previous nightly (until 2026-09-23 the first image of a run pruned the previous one, PC
 # image and all, and the site had a half-built nightly for as long as the run took).
+#
+# The nightly is event-driven since 2026-09-26: a component's develop build, once its `nightly` pre-release
+# holds the new files, sends a `component-nightly` repository_dispatch here (autobleem-build's nightly-release
+# action, `dispatch-token`), and this runs at once instead of waiting for the schedule (which GitHub started
+# five hours late every day). Such a run waits AB_NIGHTLY_SETTLE_SECONDS (default 180) first, so the sibling
+# builds of a multi-repository change (a core bump reaches the launcher, the console tools and the Store within
+# minutes) are in the same assembly, and skips like the schedule when the fingerprint is already published.
+# The concurrency group never cancels: GitHub keeps one run going and one pending, a newer pending run
+# replacing the older - a burst of pushes gives at most two assemblies, and a half-built nightly is never
+# killed. The schedule stays as the safety net (a component whose token was missing, a failed dispatch).
+#
+# `images: false` (workflow_dispatch) assembles and publishes the packages without the three disk images -
+# the fast "packages only" build. Its sources.json says so, and an automatic run with the same components
+# builds the images rather than skip.
 name: assemble
 
 on:
@@ -40,6 +54,9 @@ on:
     tags: ['v*']
   schedule:
     - cron: '17 3 * * *'
+  # a component's nightly-release (see above): client_payload {repo, sha, version}
+  repository_dispatch:
+    types: [component-nightly]
   workflow_dispatch:
     inputs:
       channel:
@@ -54,10 +71,20 @@ on:
         description: platforms to assemble (space separated; rpi-armhf rpi-arm64 pcusb psc win)
         type: string
         default: 'rpi-armhf rpi-arm64 pcusb psc win'
+      images:
+        description: build the disk images too (false = packages only, fast)
+        type: boolean
+        default: true
+      skip_unchanged:
+        description: nightly only - do nothing when the site already has a nightly built from these same components
+        type: boolean
+        default: false
 
+# never cancel: one run going, at most one pending (GitHub replaces an older pending run with a newer one) -
+# a debounce, not a kill switch. A schedule, a repository_dispatch and a dispatch on develop share the group.
 concurrency:
   group: assemble-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   plan:
@@ -65,18 +92,37 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       platforms: ${{ steps.p.outputs.json }}
+      platform_list: ${{ steps.p.outputs.list }}
       image_platforms: ${{ steps.p.outputs.image_json }}
       version: ${{ steps.v.outputs.version }}
       channel: ${{ steps.v.outputs.channel }}
       source_tag: ${{ steps.v.outputs.source_tag }}
       sources: ${{ steps.v.outputs.sources }}
       skip: ${{ steps.v.outputs.skip }}
+      images: ${{ steps.p.outputs.images }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Let a multi-repository change settle
+        if: github.event_name == 'repository_dispatch'
+        env:
+          FROM_REPO: ${{ github.event.client_payload.repo }}
+          FROM_VERSION: ${{ github.event.client_payload.version }}
+          SETTLE: ${{ vars.AB_NIGHTLY_SETTLE_SECONDS }}
+        run: |
+          # the components' nightlies of one change land minutes apart; wait for the siblings so one assembly
+          # carries them all (one arriving meanwhile queues as the pending run, and skips if it has nothing new)
+          s="${SETTLE:-180}"; [[ "$s" =~ ^[0-9]+$ ]] || s=180
+          echo "started by $FROM_REPO's nightly ${FROM_VERSION:-?}; waiting ${s}s for its siblings"
+          sleep "$s"
       - id: p
         run: |
           p="${{ inputs.platforms }}"; [ -n "$p" ] || p="rpi-armhf rpi-arm64 pcusb psc win"
+          # images: only a dispatch can say false; a tag, the schedule and a component's dispatch build them.
+          # Spelled out in bash: an absent boolean input compares equal to false in an expression
+          images="${{ inputs.images }}"; [ "$images" = false ] || images=true
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+          echo "list=$(echo $p)" >> "$GITHUB_OUTPUT"
           echo "json=$(printf '%s\n' $p | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
           # a separate, psc-filtered list for the image job below: the console has no flashable image (a
           # stick tarball unpacked by AutoBleemInstaller.exe, not an .img.xz), and matrix context isn't
@@ -87,7 +133,7 @@ jobs:
         run: |
           set -euo pipefail
           channel="${{ inputs.channel }}"
-          [ "${{ github.event_name }}" = schedule ] && channel=nightly
+          case "${{ github.event_name }}" in schedule|repository_dispatch) channel=nightly ;; esac
           [ -n "$channel" ] || channel=release
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
           if [ "$channel" = release ]; then
@@ -100,7 +146,7 @@ jobs:
           echo "source_tag=nightly" >> "$GITHUB_OUTPUT"
           # what every component's nightly pre-release holds now: name, size and upload time of each asset
           fp=""
-          for r in autobleem pcsx-ab pcsx-abnxt autobleem-console-tools autobleem-pc-tools proc_unzip; do
+          for r in autobleem pcsx-ab pcsx-abnxt autobleem-console-tools autobleem-pc-tools proc_unzip ext_store; do
             id="$(gh api "repos/autobleem2/$r/releases/tags/nightly" --jq .id 2>/dev/null || true)"
             [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::autobleem2/$r has no nightly pre-release yet (its develop CI makes it)"; exit 1; }
             fp+="$(gh api --paginate "repos/autobleem2/$r/releases/$id/assets" --jq '.[] | "'"$r"' \(.name) \(.size) \(.updated_at)"' | sort)"$'\n'
@@ -116,12 +162,21 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "sources=$sum" >> "$GITHUB_OUTPUT"
           printf '%s' "$fp"
-          # the schedule skips a night nothing changed on: the published folder's sources.json says what it was
-          # built from
+          # the schedule and a component's dispatch (and a dispatch that asks for it) skip when nothing changed:
+          # the published folder's sources.json says what it was built from. A packages-only build's says
+          # "images": false, a build of some platforms lists them - neither is enough for a run that asks for
+          # more (a sources.json from before those keys was a full build)
           skip=false
-          if [ "${{ github.event_name }}" = schedule ] &&
-             curl -sf "https://autobleem.retromenele.pl/nightly/$v/sources.json" | grep -q "\"$sum\""; then
-            skip=true; echo "nightly/$v was built from these same components - nothing to do"
+          if [ "${{ github.event_name }}" != workflow_dispatch ] || [ "${{ inputs.skip_unchanged }}" = true ]; then
+            src="$(curl -sf "https://autobleem.retromenele.pl/nightly/$v/sources.json" || true)"
+            pub="$(sed -n 's/.*"platforms": *"\([^"]*\)".*/\1/p' <<< "$src")"
+            [ -n "$pub" ] || pub="rpi-armhf rpi-arm64 pcusb psc win"
+            covered=true
+            for x in ${{ steps.p.outputs.list }}; do case " $pub " in *" $x "*) ;; *) covered=false ;; esac; done
+            if grep -q "\"$sum\"" <<< "$src" && [ "$covered" = true ] &&
+               { [ "${{ steps.p.outputs.images }}" = false ] || ! grep -q '"images": *false' <<< "$src"; }; then
+              skip=true; echo "nightly/$v was built from these same components - nothing to do"
+            fi
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
@@ -211,7 +266,8 @@ jobs:
     # Persists the pristine "before AutoBleem" base across runs on the HOST (not actions/cache - see
     # AB_IMAGE_CACHE_DIR below and the image-build-cache-base memory note) so a repeat build skips the RPi
     # OS download / PC mmdebstrap step entirely.
-    if: vars.AB_CI_ENABLED == 'true' && vars.AB_IMAGE_BUILD_ENABLED == 'true'
+    # plan's images: false is the packages-only build
+    if: vars.AB_CI_ENABLED == 'true' && vars.AB_IMAGE_BUILD_ENABLED == 'true' && needs.plan.outputs.images == 'true'
     needs: [plan, assemble]
     strategy:
       fail-fast: false
@@ -504,7 +560,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          printf '{"sources": "%s", "run": "%s/%s/actions/runs/%s"}\n' "${{ needs.plan.outputs.sources }}" \
+          printf '{"sources": "%s", "images": %s, "platforms": "%s", "run": "%s/%s/actions/runs/%s"}\n' \
+            "${{ needs.plan.outputs.sources }}" "${{ needs.plan.outputs.images }}" "${{ needs.plan.outputs.platform_list }}" \
             "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > out/sources.json
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
