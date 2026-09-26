@@ -47,13 +47,26 @@ MODE=""                  # --rootless | --mount (default: mount as root, rootles
 RELEASE="${AB_PC_DEBIAN_RELEASE:-bookworm}"   # --release: the Debian release (bookworm is the last with an i386 kernel)
 MIRROR="${AB_PC_DEBIAN_MIRROR:-http://deb.debian.org/debian}"   # --mirror
 ROOT_SIZE="${AB_PC_ROOT_SIZE:-4G}"   # --root-size: the root partition in the image (grown on the first boot)
+# how long a cache-hit root.tar is trusted before it is rebuilt anyway (AB_PC_ROOT_BASE_MAX_AGE_DAYS): the
+# cache key covers everything WE control (suite, mirror, package list, the hooks), but mmdebstrap resolves
+# package *versions* from the mirror at build time - a root built from an unchanged recipe six months apart
+# can still carry different (e.g. security-patched) package builds. Same purpose as the Pi image cache's
+# 30-day mtime eviction of the downloaded base in assemble.yml, done here instead since this cache is a
+# built artifact, not a download to re-fetch.
+ROOT_BASE_MAX_AGE_DAYS="${AB_PC_ROOT_BASE_MAX_AGE_DAYS:-30}"
 ESP_SIZE="${AB_PC_ESP_SIZE:-256M}"   # --esp-size
 XZ_LEVEL="${AB_XZ_LEVEL:-4}"         # --xz-level
 KEEP_RAW=0               # --keep-raw
 VERSION=""               # --version
 DRY_RUN=0
 NO_AMD64_KERNEL=0        # --no-amd64-kernel: leave the 64-bit kernel out (BIOS and 32-bit UEFI machines only)
-REUSE_ROOT=0             # --reuse-root: keep the work dir's root.tar from the last run (skips mmdebstrap, ~8 min)
+REUSE_ROOT=0             # --reuse-root: force the work dir's root.tar to be kept as-is, skipping even the
+                         # cache-key check below (for iterating on the image assembly, not for a release)
+
+# root_base_cache_key() bump this whenever build_root()'s own recipe changes in a way the hash below would
+# not otherwise catch (e.g. a new mmdebstrap flag that isn't sourced from a hashed file) - a cheap insurance
+# policy on top of the content hash, same idea as bumping a Docker image tag by hand.
+ROOT_BASE_CACHE_VERSION=1
 
 # what the root gets. The launcher's own runtime (SDL2, Mesa's GL/EGL/GLES + GBM for kmsdrm, libpng),
 # plymouth for the splash, exfatprogs/parted/e2fsprogs for install.sh's partitioning, NetworkManager +
@@ -109,8 +122,12 @@ Usage: tools/make_pc_image.sh --package PATH [options]
   --esp-size SIZE      the EFI system partition (default: 256M)
   --no-amd64-kernel    no 64-bit kernel: BIOS and 32-bit-UEFI machines only, ~80 MB less (see the header)
   --reuse-root         take the work directory's root.tar from the last run instead of running mmdebstrap
-                       again (the package inside it is the last run's too - for iterating on the image
-                       assembly, not for a release)
+                       again, without even checking whether the release/mirror/architectures/package list
+                       changed (build_root() already does that check on its own on every run, and rebuilds
+                       anyway past AB_PC_ROOT_BASE_MAX_AGE_DAYS - default 30 - even when nothing changed, to
+                       still pick up mirror-side updates; this flag is for iterating on the image assembly
+                       when you know the root itself is fine, not for a release). The AutoBleem package is
+                       always injected fresh either way.
   --xz-level N         xz preset for the output, 0-9 (default 4, or AB_XZ_LEVEL)
   --keep-raw           keep the decompressed .img after recompressing
   --version V          name the image autobleem-V-pcusb-i386.img.xz (default: the package's VERSION file)
@@ -249,7 +266,9 @@ EOF
                     "$REPO_DIR/payload_linux/system/plymouth/autobleem.script" \
                     "$REPO_DIR/payload_linux/system/plymouth/splash.png" "$s/usr/share/plymouth/themes/autobleem/"
 
-    install -m 0644 "$PACKAGE" "$s/opt/autobleem-image/$(basename "$PACKAGE")"
+    # NOT the package itself: it is injected after the root is built (or reused from cache), in
+    # make_root_fs() - see root_base_cache_key()'s comment. The directory is still made here so the base
+    # root always has somewhere for it to land.
     install -m 0755 "$REPO_DIR/payload_linux/system/autobleem-firstboot.sh" "$s/opt/autobleem-image/autobleem-firstboot.sh"
     install -m 0644 "$REPO_DIR/payload_linux/system/autobleem-install-ui.py" "$s/opt/autobleem-image/autobleem-install-ui.py"
     install -m 0644 "$REPO_DIR/payload_linux/system/plymouth/splash.png" "$s/opt/autobleem-image/splash.png"
@@ -294,6 +313,41 @@ EOF
 }
 
 #*******************************
+# root_base_cache_key
+#*******************************
+# What decides whether last run's ROOT_TAR can be reused instead of running mmdebstrap again: the recipe -
+# every file stage_root_files() wrote (the package is deliberately never among them, see there) plus
+# finish-root.sh, hashed as a tree so an edit to either invalidates this on its own - the Debian release,
+# mirror, architectures and package list mmdebstrap is called with, and ROOT_BASE_CACHE_VERSION. Call this
+# only after stage_root_files() and after finish-root.sh has been written, both of which build_root() does
+# first. The --package tarball itself never enters this key: injecting it is the one step that always runs,
+# cache hit or not (make_root_fs()).
+root_base_cache_key() {
+    local packages="$PACKAGES_COMMON $PACKAGES_KERNELS" arches=i386
+    if [ "$NO_AMD64_KERNEL" -eq 0 ]; then
+        packages="$packages $PACKAGES_AMD64_KERNEL"
+        arches=i386,amd64
+    fi
+    {
+        printf 'root-base-cache-v%s\n' "$ROOT_BASE_CACHE_VERSION"
+        printf 'release=%s\nmirror=%s\narches=%s\n' "$RELEASE" "$MIRROR" "$arches"
+        printf 'packages=%s\n' "$packages"
+        # the mmdebstrap flags below that are not sourced from a file on disk (components/skip/aptopt/
+        # dpkgopt/essential-hook) - spelled out here so a change to any of them changes the key too
+        printf 'mmdebstrap-flags=--variant=minbase --components=main,contrib,non-free,non-free-firmware --skip=check/qemu --aptopt=Acquire::Languages "none" --dpkgopt=path-exclude=/usr/share/man/* --dpkgopt=path-exclude=/usr/share/doc/*/*.gz --essential-hook=divert-zz-update-grub\n'
+        # relative paths (cd first), so the key does not change just because --work pointed somewhere else;
+        # content AND mode, since a chmod (e.g. the initramfs hook's 0755) changes behaviour with no byte
+        # in the file itself changing. A symlink is hashed by its target, never followed: the stage's
+        # ssh.service link points at /lib/systemd/system/..., which would hash (or fail on) the build
+        # container's own file rather than anything in the recipe
+        ( cd "$WORK_DIR/stage" && find . \( -type f -o -type l \) -printf '%m %p\n' | LC_ALL=C sort )
+        ( cd "$WORK_DIR/stage" && find . -type l -printf '%p -> %l\n' | LC_ALL=C sort )
+        ( cd "$WORK_DIR/stage" && find . -type f | LC_ALL=C sort | xargs -r sha256sum )
+        sha256sum <"$WORK_DIR/finish-root.sh"   # stdin, not an argument - so no absolute path leaks into the hash
+    } | sha256sum | cut -d' ' -f1
+}
+
+#*******************************
 # build_root
 #*******************************
 # mmdebstrap makes the Debian root and, in its hooks, finishes it from inside: our staged files copied in,
@@ -301,6 +355,13 @@ EOF
 # this host, so these run natively in the chroot - the one thing the Pi's foreign-arch injection could not
 # do), the ssh host keys and the machine-id removed. The result is a tar (rootless: mke2fs turns it into
 # the ext4 root below without ever mounting anything) or, with root, the loop-mounted root partition directly.
+#
+# The AutoBleem package itself is NOT part of this: it changes every night (a fresh build), while the
+# Debian root it goes into almost never does - so mmdebstrap only runs when root_base_cache_key() says an
+# input actually changed (WORK_DIR is the CI's persistent host cache, ~/ab-image-cache/pcusb - see
+# assemble.yml), and make_root_fs() injects the package afterwards, every run, into a fresh extract of
+# whichever ROOT_TAR is on hand (cached or freshly built). A rebuild used to cost ~8 minutes of mmdebstrap
+# every night purely to bake the same-shaped root back in around a different package.
 build_root() {
     local packages="$PACKAGES_COMMON $PACKAGES_KERNELS" arches=i386
     if [ "$NO_AMD64_KERNEL" -eq 0 ]; then
@@ -348,15 +409,28 @@ EOF
     chmod +x "$finish"
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '    would run: mmdebstrap --mode=%s --architectures=%s --variant=minbase --include=... %s %s\n' "$mmmode" "$arches" "$RELEASE" "$ROOT_TAR"
+        printf '    would run: mmdebstrap --mode=%s --architectures=%s --variant=minbase --include=... %s %s (or reuse it, unchanged)\n' "$mmmode" "$arches" "$RELEASE" "$ROOT_TAR"
         return 0
     fi
+
+    local key key_file
+    key="$(root_base_cache_key)"
+    key_file="$ROOT_TAR.key"
+
     if [ "$REUSE_ROOT" -eq 1 ] && [ -f "$ROOT_TAR" ]; then
-        warn "--reuse-root: taking $ROOT_TAR from the last run (mmdebstrap skipped)"
+        warn "--reuse-root: taking $ROOT_TAR from the last run as-is (mmdebstrap skipped, no cache-key check)"
         return 0
+    fi
+    if [ -f "$ROOT_TAR" ] && [ -f "$key_file" ] && [ "$(cat "$key_file")" = "$key" ]; then
+        if [ -n "$(find "$ROOT_TAR" -mtime "+$ROOT_BASE_MAX_AGE_DAYS" 2>/dev/null)" ]; then
+            log "Debian $RELEASE root cache key is unchanged but the cached root is over $ROOT_BASE_MAX_AGE_DAYS days old - rebuilding anyway to pick up mirror-side updates"
+        else
+            log "Debian $RELEASE root unchanged since the last run (cache key $(echo "$key" | cut -c1-12)...) - mmdebstrap skipped, only the package goes in"
+            return 0
+        fi
     fi
     log "Building the Debian $RELEASE i386 root with mmdebstrap (--mode=$mmmode, $(echo $packages | wc -w) packages)"
-    rm -f "$ROOT_TAR"
+    rm -f "$ROOT_TAR" "$key_file"
     # the kernel packages' postinst runs update-grub, which cannot probe a device inside a chroot and would
     # fail the whole build: grub2-common's hook is diverted away before the packages go in, and the
     # diversion removed again at the end (finish-root.sh) so a kernel upgrade on the stick does update GRUB
@@ -371,26 +445,29 @@ EOF
         --format=tar \
         "$RELEASE" "$ROOT_TAR" "$MIRROR" \
         || die "mmdebstrap failed"
-    log "Root tarball: $(du -h "$ROOT_TAR" | cut -f1)"
+    echo "$key" >"$key_file"
+    log "Root tarball: $(du -h "$ROOT_TAR" | cut -f1) (cached for next time, key $(echo "$key" | cut -c1-12)...)"
 }
 
 #*******************************
 # make_root_fs
 #*******************************
 # ext4 from the tar without mounting anything: the tar is unpacked (as root; or inside a user namespace
-# where we are root - the owners are kept either way) and mke2fs -d takes the directory. (mke2fs since
+# where we are root - the owners are kept either way), the AutoBleem package copied in fresh (ROOT_TAR
+# itself never has it - see root_base_cache_key()), and mke2fs -d takes the directory. (mke2fs since
 # 1.47.1 reads a tar directly too, but through libarchive in the C locale - it refuses the first non-ASCII
 # file name, and Debian's packages have a few - so the directory it is.)
 make_root_fs() {
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '    would make %s (ext4, %s) from %s\n' "$ROOT_FS" "$ROOT_SIZE" "$ROOT_TAR"
+        printf '    would make %s (ext4, %s) from %s + the package\n' "$ROOT_FS" "$ROOT_SIZE" "$ROOT_TAR"
         return 0
     fi
-    log "Making the ext4 root ($ROOT_SIZE) from the tarball"
+    log "Making the ext4 root ($ROOT_SIZE) from the tarball, with the package injected"
     rm -f "$ROOT_FS"
     local dir="$WORK_DIR/rootdir"
     rm -rf "$dir"; mkdir -p "$dir"
-    local cmd="tar -xf '$ROOT_TAR' -C '$dir' && mke2fs -q -F -t ext4 -L AUTOBLEEM_ROOT -d '$dir' '$ROOT_FS' '$ROOT_SIZE'"
+    local pkg_dest="$dir/opt/autobleem-image/$(basename "$PACKAGE")"
+    local cmd="tar -xf '$ROOT_TAR' -C '$dir' && install -m 0644 '$PACKAGE' '$pkg_dest' && mke2fs -q -F -t ext4 -L AUTOBLEEM_ROOT -d '$dir' '$ROOT_FS' '$ROOT_SIZE'"
     if [ "$(id -u)" -eq 0 ]; then
         run sh -c "$cmd" || die "mke2fs -d failed"
     else

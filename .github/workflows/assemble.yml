@@ -302,12 +302,15 @@ jobs:
               # host's Docker socket (root-equivalent already). --mount (real root, the container's
               # default when EUID==0) needs only --privileged on the docker run below (found on the first
               # real run, 2026-09-23: "E: unable to unshare the mount namespace").
-              # NOT --reuse-root: it skips mmdebstrap entirely, INCLUDING its customize-hook that injects
-              # the AutoBleem package - so a reused root keeps whatever package was baked in last time, with
-              # no way to update it. Safe only when the exact same content is being rebuilt (a dev-iteration
-              # shortcut); unsafe here since a real build's package differs every time. Found the hard way,
-              # 2026-09-23: verify_image() correctly refused to ship a stale/mismatched package rather than
-              # silently produce a broken image ("the package inside the image is X bytes, the file is Y").
+              # NOT --reuse-root here either, still - but for a different reason now (2026-09-26): the
+              # AutoBleem package no longer lives inside mmdebstrap's customize-hook at all, so a plain run
+              # already skips mmdebstrap on its own whenever $CACHE/root.tar + its .key file match this
+              # run's release/mirror/architectures/package list (root_base_cache_key() in
+              # make_pc_image.sh), and always injects THIS run's package fresh into a copy of it afterwards
+              # - --reuse-root would only add "and skip even that check", which buys nothing here and would
+              # risk missing a real root-recipe change (a new package in PACKAGES_COMMON, say). verify_image()
+              # still refuses to ship a mismatched package regardless ("the package inside the image is X
+              # bytes, the file is Y") - kept as a guard, not the only thing making this safe any more.
               tools/make_pc_image.sh --mount \
                 --package dist/autobleem-pcusb-*.tar.gz \
                 --work "$CACHE" --out build_image/out \
