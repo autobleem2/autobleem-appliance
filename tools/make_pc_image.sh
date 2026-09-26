@@ -337,9 +337,12 @@ root_base_cache_key() {
         printf 'mmdebstrap-flags=--variant=minbase --components=main,contrib,non-free,non-free-firmware --skip=check/qemu --aptopt=Acquire::Languages "none" --dpkgopt=path-exclude=/usr/share/man/* --dpkgopt=path-exclude=/usr/share/doc/*/*.gz --essential-hook=divert-zz-update-grub\n'
         # relative paths (cd first), so the key does not change just because --work pointed somewhere else;
         # content AND mode, since a chmod (e.g. the initramfs hook's 0755) changes behaviour with no byte
-        # in the file itself changing
+        # in the file itself changing. A symlink is hashed by its target, never followed: the stage's
+        # ssh.service link points at /lib/systemd/system/..., which would hash (or fail on) the build
+        # container's own file rather than anything in the recipe
         ( cd "$WORK_DIR/stage" && find . \( -type f -o -type l \) -printf '%m %p\n' | LC_ALL=C sort )
-        ( cd "$WORK_DIR/stage" && find . \( -type f -o -type l \) | LC_ALL=C sort | xargs -r sha256sum )
+        ( cd "$WORK_DIR/stage" && find . -type l -printf '%p -> %l\n' | LC_ALL=C sort )
+        ( cd "$WORK_DIR/stage" && find . -type f | LC_ALL=C sort | xargs -r sha256sum )
         sha256sum <"$WORK_DIR/finish-root.sh"   # stdin, not an argument - so no absolute path leaks into the hash
     } | sha256sum | cut -d' ' -f1
 }
