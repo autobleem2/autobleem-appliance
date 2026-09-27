@@ -31,15 +31,20 @@ work="$(mktemp -d)"; STAGE="$work/autobleem-psc"; mkdir -p "$STAGE"
 dl="$work/dl"; mkdir -p "$dl"
 
 # 1. the psc skeleton + launcher (autobleem2/autobleem's publish-launcher.yml, psc target): the exploit dir,
-#    Autobleem/{rc,start.sh,lib/libs.tar.gz}, Docs/, Games/, Themes/, Autobleem/bin/autobleem
-#    (gui+absplash+abfatflag+abupdate+resources+internal.db) and Autobleem/bin/abpad. NOT RetroArch/, NOT Apps/ -
-#    see the header comment.
+#    Autobleem/{rc,start.sh,lib/libs.tar.gz}, Docs/, Games/, Autobleem/bin/autobleem
+#    (gui+absplash+abfatflag+abupdate+resources+internal.db) and Autobleem/bin/abpad. NOT RetroArch/, NOT Apps/,
+#    NOT Themes/ any more (D5, 2026-09-27: themes have their own release, autobleem2/autobleem-themes,
+#    staged below) - see the header comment.
 fetch_release_assets autobleem2/autobleem "$VERSION" "launcher-psc-*.tar.gz" "$dl"
 tar -xzf "$dl"/launcher-psc-*.tar.gz -C "$STAGE"
 for need in 028c18a9-ec4b-4632-b2cf-d4e20f252e8f/LUPDATA.BIN Autobleem/start.sh Autobleem/rc/boot.sh \
             Autobleem/lib/libs.tar.gz Autobleem/bin/autobleem/autobleem-gui; do
     [ -e "$STAGE/$need" ] || { echo "launcher-psc lacks $need - an artifact from before the psc skeleton?" >&2; exit 1; }
 done
+# the five UI themes (D5, 2026-09-27): autobleem2/autobleem-themes' own release, not the launcher's -
+# AutoBleemInstaller.exe recognises the psc-fs tarball by Themes/ at its top (see the tar step below), so
+# this has to land before that is built
+stage_themes "$STAGE"
 
 # 2. the console tools (autobleem2/autobleem-console-tools): Extensions/pscbios/ - PSC-Bios, an extension of
 #    the launcher since 2026-09-24 (bin/psc/pscbios.so, run from Hardware Information) - and Apps/abflashkit/,

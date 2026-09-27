@@ -125,3 +125,24 @@ stage_console_tools_extension() {
     rm -rf "$tmp"
     echo "    bundled the pscbios extension ($repo@${AB_SOURCE_TAG:-$version}, $stamp)"
 }
+
+# stage_themes DEST - the five themes (autobleem2/autobleem-themes, D5 2026-09-26): its package
+# themes-<v>.tar.gz (archive root Themes/) unpacked to DEST/Themes/. Themes have their own release, not
+# the unified one: AB_SOURCE_TAG=nightly for a development build, else the latest v* release (its
+# nightly while it has none yet) - same pattern as stage_processor.
+stage_themes() {
+    local dest="$1" repo=autobleem2/autobleem-themes tag tmp
+    tag="${AB_SOURCE_TAG:-}"
+    if [ -z "$tag" ]; then
+        tag="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null)" || tag=""
+        [ -n "$tag" ] || { tag=nightly; echo "    $repo has no release yet - its nightly is bundled"; }
+    fi
+    tmp="$(mktemp -d)"
+    AB_SOURCE_TAG="$tag" fetch_release_assets "$repo" "$tag" "themes-*.tar.gz" "$tmp" || return 1
+    mkdir -p "$dest"
+    rm -rf "${dest:?}/Themes"
+    tar -xzf "$tmp"/themes-*.tar.gz -C "$dest"
+    [ -d "$dest/Themes/default" ] || { echo "$repo's package lacks Themes/default" >&2; return 1; }
+    rm -rf "$tmp"
+    echo "    bundled the themes ($repo@$tag)"
+}

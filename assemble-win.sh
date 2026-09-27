@@ -8,7 +8,9 @@
 #                                   user downloads and what the launcher's own update (C3) runs with /S
 #
 # The pieces: the launcher's program folder + its NSIS script (autobleem2/autobleem, publish-launcher.yml's
-# win target: AutoBleem/ with autobleem-gui.exe, resources, DLLs, Themes/, dataroot.txt.example, and nsis/),
+# win target: AutoBleem/ with autobleem-gui.exe, resources, DLLs, dataroot.txt.example, and nsis/ - no
+# Themes/ any more, D5 2026-09-27: themes have their own release, autobleem2/autobleem-themes, staged
+# below instead of riding in the launcher's package),
 # the two PS1 emulators' win64 packages (pcsx-ab -> emu/, pcsx-abnxt -> emunxt/ - Options -> "PS1 Emulator"
 # picks, as on the console and the Pi) and AutoBleemWinSetup.exe, the setup helper that fills the data tree
 # from the site (autobleem2/autobleem-pc-tools). The same program folder tools/make_win_package.sh --product
@@ -26,6 +28,9 @@ APP="$STAGE/AutoBleem"
 # 1. the launcher's program folder and the installer script
 fetch_release_assets autobleem2/autobleem "$VERSION" "launcher-win64-*.tar.gz" "$dl"
 tar -xzf "$dl"/launcher-win64-*.tar.gz -C "$STAGE"
+# the five UI themes (D5, 2026-09-27): autobleem2/autobleem-themes' own release, not the launcher's -
+# staged before the check below, which now passes because of this rather than the launcher's package
+stage_themes "$APP"
 for need in AutoBleem/autobleem-gui.exe AutoBleem/SDL2.dll AutoBleem/Themes nsis/autobleem.nsi; do
     [ -e "$STAGE/$need" ] || { echo "launcher-win64 lacks $need" >&2; exit 1; }
 done
