@@ -2,7 +2,7 @@
 #
 # Build a Raspberry Pi Imager-flashable AutoBleem image: an official Raspberry Pi OS Lite image (armhf or
 # arm64) with an AutoBleem package tarball and a first-boot service injected - nothing inside the base image
-# is modified beyond that (no chroot, no package pre-install: see docs/rpi-image-and-update-plan.md, "what
+# is modified beyond that (no chroot, no package pre-install: see autobleem-main/docs/rpi-image-and-update-plan.md, "what
 # stays out of scope for this round"). Raspberry Pi Imager's own OS customisation (hostname, user, WiFi,
 # SSH, locale) keeps working unmodified, because the image's own first-boot mechanism (cloud-init or
 # firstrun.sh, whichever the base image ships) is never touched; autobleem-firstboot.service runs after it,
@@ -26,7 +26,7 @@
 # Output: <out>/autobleem-<version>-rpi-<arch>.img.xz (the version is the package's VERSION file, written by
 # tools/make_rpi_package.sh from the build's version.h; --version overrides it), plus <out>/rpi_imager_repo.json (a copy of
 # tools/rpi_imager_repo.json with this run's size/hash fields, url and icon filled in - what
-# tools/repo_publish.sh image turns into the site's rpi-imager/os_list.json).
+# autobleem-repo's tools/repo_publish.sh image turns into the site's rpi-imager/os_list.json).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,7 +44,7 @@ MODE=""                  # --mount | --rootless: how the image is edited (defaul
 XZ_LEVEL="${AB_XZ_LEVEL:-4}"   # xz preset for the output: 4 took 7 min where 6 took 12 on the server, for ~2% more size
 KEEP_RAW=0               # --keep-raw: don't delete the decompressed .img after recompressing
 VERSION=""               # --version: what to name the image after; default: the package's VERSION file
-REPO_URL="${AB_REPO_URL:-https://autobleem.retromenele.pl}"   # --repo: where tools/repo_publish.sh image puts it
+REPO_URL="${AB_REPO_URL:-https://autobleem.retromenele.pl}"   # --repo: where autobleem-repo's tools/repo_publish.sh image puts it
 DRY_RUN=0
 
 #*******************************
@@ -84,7 +84,7 @@ Usage: sudo ./tools/make_rpi_image.sh --arch armhf|arm64 --package PATH [options
                        build server, for about 2% more size)
   --repo URL           the download repository the image will be published to - what the Imager JSON's
                        url and icon fields point at (default: AB_REPO_URL or AutoBleem's; the JSON is
-                       laid out as tools/repo_publish.sh image puts things: rpi-imager/images/<version>/)
+                       laid out as autobleem-repo's tools/repo_publish.sh image puts things: rpi-imager/images/<version>/)
   --version V          name the image autobleem-V-rpi-<arch>.img.xz (default: the VERSION file inside the
                        package, which tools/make_rpi_package.sh writes from the build's version.h)
   --dry-run            print what would happen and change nothing (no download, no mount, no root needed)
@@ -308,7 +308,7 @@ decompress_base_image() {
 # mount_image / unmount_image
 #*******************************
 # Both partitions are mounted: the payload goes under /opt on the root filesystem (the FAT boot partition
-# is small and shared with the kernel/firmware - see docs/rpi-image-and-update-plan.md), and the boot
+# is small and shared with the kernel/firmware - see autobleem-main/docs/rpi-image-and-update-plan.md), and the boot
 # partition gets two small edits: cmdline.txt loses the word "resize" (see inject_boot_files) and gains
 # autobleem.txt (the first-boot options, editable from any PC).
 LOOP_DEV=""
@@ -565,7 +565,7 @@ for entry in data["os_list"]:
         entry["extract_sha256"] = os.environ["EXTRACT_SHA256"]
         entry["image_download_size"] = int(os.environ["DOWNLOAD_SIZE"])
         entry["image_download_sha256"] = os.environ["DOWNLOAD_SHA256"]
-        # where tools/repo_publish.sh image will put it (repo_index.py fills these in again from what it
+        # where autobleem-repo's tools/repo_publish.sh image will put it (its repo_index.py fills these in again from what it
         # finds, so a different --repo at publish time still ends up right)
         entry["url"] = os.environ["IMAGE_URL"]
         entry["icon"] = os.environ["ICON_URL"]
@@ -597,7 +597,7 @@ summary() {
     cat <<EOF
 
   Image:      $OUT_IMG
-  Repo JSON:  $OUT_DIR/rpi_imager_repo.json  (url/icon point at $REPO_URL; tools/repo_publish.sh image
+  Repo JSON:  $OUT_DIR/rpi_imager_repo.json  (url/icon point at $REPO_URL; autobleem-repo's tools/repo_publish.sh image
               puts the image and this file on the site, where it becomes rpi-imager/os_list.json)
 
   Test it with Raspberry Pi Imager: "Use custom", point at the .img.xz directly (no customisation offered

@@ -23,7 +23,8 @@
 # data-partition tree: Autobleem/ - with pcsx-ab and its plugins already in bin/emu (armhf), bin/emu-arm64
 # (arm64) or bin/emu-i386 (the PC stick), put there by pcsx-rearmed-develop's builds - Games/, Apps/) with
 # the built parts filled in: the binary and its resources in Autobleem/bin/autobleem, the cover databases in
-# Autobleem/bin/db, and payload/Themes as Themes/. install.sh then copies Autobleem/ Themes/ Games/ Apps/
+# Autobleem/bin/db, and the autobleem-themes submodule's Themes/ as Themes/. install.sh then copies
+# Autobleem/ Themes/ Games/ Apps/
 # onto the exFAT partition as they are - the same install.sh serves every architecture, detecting which at
 # runtime (dpkg --print-architecture), and the platform (a Pi or a PC) with it.
 #
@@ -82,6 +83,16 @@ cp -a "$PAYLOAD/." "$STAGE/"
 # built for it - leaves no emu/ at all: install.sh's RetroArch core fallback plays PS1 then).
 EMU_ARCH_SUFFIX="${EMU_SRC_SUBDIR#emu}"   # "" for armhf, "-arm64", "-i386"
 for emu in emu emunxt; do
+    # pcsx-ab / pcsx-abnxt: ci/build.sh stages a freshly built emulator into $BUILD_DIR/emu-stage/ rather
+    # than the tracked payload_linux/Autobleem/bin/emu* tree (D21 - a build must never leave the checkout
+    # dirty). Use it when it is there, overwriting the checked-in copy the cp -a above just staged; the
+    # rename below then treats it exactly as it would the checked-in one.
+    staged="$BUILD_DIR/emu-stage/$emu$EMU_ARCH_SUFFIX"
+    if [ -d "$staged" ]; then
+        rm -rf "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX"
+        mkdir -p "$STAGE/Autobleem/bin"
+        cp -a "$staged" "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX"
+    fi
     if [ -n "$EMU_ARCH_SUFFIX" ]; then
         rm -rf "$STAGE/Autobleem/bin/$emu"
         if [ -d "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX" ]; then
@@ -105,6 +116,18 @@ if [ -z "${AB_NO_UPX:-}" ] && command -v upx >/dev/null 2>&1; then
     upx -q --best --lzma "$APP/autobleem-gui"
 fi
 cp -a "$REPO/src/resources/." "$APP/"
+
+# the virtual gamepad (docs/virtual-gamepad-plan.md): the daemon that reads the pads and the shim an
+# App is preloaded with. Both are optional at run time - rc/app_env.sh checks for them and an App runs
+# without them as it always did - so a build that somehow lacks them is a warning, not a failure.
+ABPAD="$STAGE/Autobleem/bin/abpad"
+mkdir -p "$ABPAD"
+if [ -f "$BUILD_DIR/apps/abpad/abpadd" ] && [ -f "$BUILD_DIR/apps/abpad/libabpad.so" ]; then
+    cp -a "$BUILD_DIR/apps/abpad/abpadd" "$BUILD_DIR/apps/abpad/libabpad.so" "$ABPAD/"
+else
+    echo "WARNING: no abpad in $BUILD_DIR/apps/abpad - Apps will run without the virtual gamepad" >&2
+fi
+
 cp "$REPO/LICENSE" "$REPO/THIRD_PARTY_NOTICES.md" "$APP/"  # the GPL and the notices travel with the binary
 
 # internal.db is the PlayStation Classic's own game list. An appliance has no built-in games (AB_APPLIANCE) and
@@ -120,7 +143,7 @@ if [ -f "$VERSION_H" ]; then
     ab_version="$(sed -n 's/^constexpr const char \*VERSION = "\([^"]*\)".*/\1/p' "$VERSION_H")"
     ab_hash="$(sed -n 's/^constexpr const char \*GIT_HASH = "\([^"]*\)".*/\1/p' "$VERSION_H")"
     ab_dirty="$(sed -n 's/^constexpr bool GIT_DIRTY = \([a-z]*\);.*/\1/p' "$VERSION_H")"
-    if [ "$ab_dirty" = false ] && git -C "$REPO" describe --tags --exact-match HEAD >/dev/null 2>&1; then
+    if [ "$ab_dirty" = false ] && git -C "$REPO" describe --tags --exclude nightly --exact-match HEAD >/dev/null 2>&1; then
         ab_full="$ab_version"
     else
         ab_full="$ab_version${ab_hash:+-$ab_hash}"
@@ -132,8 +155,9 @@ else
     echo "    (no $VERSION_H - the package carries no VERSION file; make_rpi_image.sh will name the image without one)"
 fi
 
-# themes: the converted theme.json layout, the same ones the console's payload ships
-cp -a "$REPO/payload/Themes/." "$STAGE/Themes/"
+# themes: the converted theme.json layout, from the autobleem-themes submodule (D5, 2026-09-26 - the
+# same five themes that used to live at payload/Themes)
+cp -a "$REPO/autobleem-themes/Themes/." "$STAGE/Themes/"
 
 # cover art databases: not in the package by default since 2026-09-19 - they are 290 MB of the 306, and
 # install.sh downloads them from the download repository (CLAUDE.md, "The download repository"; a Pi needs
