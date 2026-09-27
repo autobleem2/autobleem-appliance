@@ -23,9 +23,21 @@
 # data-partition tree: Autobleem/ - with pcsx-ab and its plugins already in bin/emu (armhf), bin/emu-arm64
 # (arm64) or bin/emu-i386 (the PC stick), put there by pcsx-rearmed-develop's builds - Games/, Apps/) with
 # the built parts filled in: the binary and its resources in Autobleem/bin/autobleem, the cover databases in
-# Autobleem/bin/db, and payload/Themes as Themes/. install.sh then copies Autobleem/ Themes/ Games/ Apps/
+# Autobleem/bin/db, and Themes/ from autobleem2/autobleem-themes' own release (D5, 2026-09-26 - the same
+# tools/release_assets.sh:stage_themes() assemble.sh uses, so a local package gets the same themes a real
+# release would; needs `gh` authenticated, or AB_THEMES_DIR=<local autobleem-themes checkout> to copy Themes/
+# from disk instead - for a machine with no `gh`). install.sh then copies Autobleem/ Themes/ Games/ Apps/
 # onto the exFAT partition as they are - the same install.sh serves every architecture, detecting which at
 # runtime (dpkg --print-architecture), and the platform (a Pi or a PC) with it.
+#
+# DOCS-5 (2026-09-27): payload_linux/, system/ and this script are this repo's own (APPLIANCE below); the
+# cross-compiled binary, src/resources, LICENSE/THIRD_PARTY_NOTICES and the build's version.h come from a
+# separate autobleem2/autobleem launcher checkout (LAUNCHER, default: cwd - run this from inside it):
+#
+#   cd /path/to/autobleem && ./make_rpi.sh && \
+#     AB_LAUNCHER_DIR="$PWD" /path/to/autobleem-appliance/tools/make_rpi_package.sh
+#
+# AB_LAUNCHER_DIR overrides the default (the working directory this is invoked from); AB_THEMES_DIR as above.
 #
 # Copy the tarball to the Pi, unpack it, and run install.sh from inside it. See payload_linux/README.md.
 set -euo pipefail
@@ -56,15 +68,25 @@ case "$ARCH" in
     *) echo "--arch takes armhf, arm64 or i386 (got '$ARCH')" >&2; exit 2 ;;
 esac
 
+ORIG_PWD="$PWD"
 cd "$(dirname "$0")/.."
-REPO="$PWD"
-PAYLOAD="$REPO/payload_linux"
-BUILD_DIR="$REPO/$BUILD_SUBDIR"
+APPLIANCE="$PWD"                        # this repo: payload_linux/, tools/release_assets.sh
+LAUNCHER="${AB_LAUNCHER_DIR:-$ORIG_PWD}" # the autobleem checkout: build_*/, src/resources, LICENSE, version.h
+PAYLOAD="$APPLIANCE/payload_linux"
+BUILD_DIR="$LAUNCHER/$BUILD_SUBDIR"
 STAGE="$BUILD_DIR/package/$TOP"
 TARBALL="$BUILD_DIR/$TARBALL_NAME"
 
+# shellcheck source=tools/release_assets.sh
+. "$APPLIANCE/tools/release_assets.sh"   # stage_themes() - the same GitHub-release fetch assemble.sh uses
+
+[ -d "$LAUNCHER/src/resources" ] || {
+    echo "no $LAUNCHER/src/resources - AB_LAUNCHER_DIR (default: the working directory, $ORIG_PWD) needs to be an autobleem (launcher) checkout" >&2
+    exit 1
+}
+
 [ -f "$BUILD_DIR/autobleem-gui" ] || {
-    echo "no $BUILD_DIR/autobleem-gui - run $MAKE_SCRIPT first" >&2
+    echo "no $BUILD_DIR/autobleem-gui - run $MAKE_SCRIPT in $LAUNCHER first" >&2
     exit 1
 }
 
@@ -82,6 +104,16 @@ cp -a "$PAYLOAD/." "$STAGE/"
 # built for it - leaves no emu/ at all: install.sh's RetroArch core fallback plays PS1 then).
 EMU_ARCH_SUFFIX="${EMU_SRC_SUBDIR#emu}"   # "" for armhf, "-arm64", "-i386"
 for emu in emu emunxt; do
+    # pcsx-ab / pcsx-abnxt: ci/build.sh stages a freshly built emulator into $BUILD_DIR/emu-stage/ rather
+    # than the tracked payload_linux/Autobleem/bin/emu* tree (D21 - a build must never leave the checkout
+    # dirty). Use it when it is there, overwriting the checked-in copy the cp -a above just staged; the
+    # rename below then treats it exactly as it would the checked-in one.
+    staged="$BUILD_DIR/emu-stage/$emu$EMU_ARCH_SUFFIX"
+    if [ -d "$staged" ]; then
+        rm -rf "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX"
+        mkdir -p "$STAGE/Autobleem/bin"
+        cp -a "$staged" "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX"
+    fi
     if [ -n "$EMU_ARCH_SUFFIX" ]; then
         rm -rf "$STAGE/Autobleem/bin/$emu"
         if [ -d "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX" ]; then
@@ -94,7 +126,7 @@ for emu in emu emunxt; do
 done
 
 # the app: the freshly cross-compiled binary plus the resources tree it reads at runtime. The resources come
-# from the repo rather than from $BUILD_DIR, which also holds the object files and CMake's own scratch.
+# from the launcher checkout rather than from $BUILD_DIR, which also holds the object files and CMake's own scratch.
 APP="$STAGE/Autobleem/bin/autobleem"
 mkdir -p "$APP" "$STAGE/Autobleem/bin/db" "$STAGE/Themes"
 cp -a "$BUILD_DIR/autobleem-gui" "$APP/"
@@ -104,8 +136,20 @@ if [ -z "${AB_NO_UPX:-}" ] && command -v upx >/dev/null 2>&1; then
     echo "==> packing autobleem-gui with upx"
     upx -q --best --lzma "$APP/autobleem-gui"
 fi
-cp -a "$REPO/src/resources/." "$APP/"
-cp "$REPO/LICENSE" "$REPO/THIRD_PARTY_NOTICES.md" "$APP/"  # the GPL and the notices travel with the binary
+cp -a "$LAUNCHER/src/resources/." "$APP/"
+
+# the virtual gamepad (docs/virtual-gamepad-plan.md): the daemon that reads the pads and the shim an
+# App is preloaded with. Both are optional at run time - rc/app_env.sh checks for them and an App runs
+# without them as it always did - so a build that somehow lacks them is a warning, not a failure.
+ABPAD="$STAGE/Autobleem/bin/abpad"
+mkdir -p "$ABPAD"
+if [ -f "$BUILD_DIR/apps/abpad/abpadd" ] && [ -f "$BUILD_DIR/apps/abpad/libabpad.so" ]; then
+    cp -a "$BUILD_DIR/apps/abpad/abpadd" "$BUILD_DIR/apps/abpad/libabpad.so" "$ABPAD/"
+else
+    echo "WARNING: no abpad in $BUILD_DIR/apps/abpad - Apps will run without the virtual gamepad" >&2
+fi
+
+cp "$LAUNCHER/LICENSE" "$LAUNCHER/THIRD_PARTY_NOTICES.md" "$APP/"  # the GPL and the notices travel with the binary
 
 # internal.db is the PlayStation Classic's own game list. An appliance has no built-in games (AB_APPLIANCE) and
 # never reads it, so shipping it would only be confusing.
@@ -120,7 +164,7 @@ if [ -f "$VERSION_H" ]; then
     ab_version="$(sed -n 's/^constexpr const char \*VERSION = "\([^"]*\)".*/\1/p' "$VERSION_H")"
     ab_hash="$(sed -n 's/^constexpr const char \*GIT_HASH = "\([^"]*\)".*/\1/p' "$VERSION_H")"
     ab_dirty="$(sed -n 's/^constexpr bool GIT_DIRTY = \([a-z]*\);.*/\1/p' "$VERSION_H")"
-    if [ "$ab_dirty" = false ] && git -C "$REPO" describe --tags --exact-match HEAD >/dev/null 2>&1; then
+    if [ "$ab_dirty" = false ] && git -C "$LAUNCHER" describe --tags --exclude nightly --exact-match HEAD >/dev/null 2>&1; then
         ab_full="$ab_version"
     else
         ab_full="$ab_version${ab_hash:+-$ab_hash}"
@@ -132,15 +176,28 @@ else
     echo "    (no $VERSION_H - the package carries no VERSION file; make_rpi_image.sh will name the image without one)"
 fi
 
-# themes: the converted theme.json layout, the same ones the console's payload ships
-cp -a "$REPO/payload/Themes/." "$STAGE/Themes/"
+# themes: autobleem2/autobleem-themes' own release (D5, 2026-09-26 - the same five themes that used to live
+# at payload/Themes), the same stage_themes() call assemble.sh makes - needs `gh` authenticated. AB_THEMES_DIR
+# is a local fallback for a machine without `gh` (or offline): a checkout of autobleem-themes to copy Themes/
+# from directly, no release fetch.
+if [ -n "${AB_THEMES_DIR:-}" ]; then
+    echo "==> themes: local checkout $AB_THEMES_DIR (AB_THEMES_DIR)"
+    [ -d "$AB_THEMES_DIR/Themes/default" ] || {
+        echo "no $AB_THEMES_DIR/Themes/default - AB_THEMES_DIR needs to be an autobleem-themes checkout" >&2
+        exit 1
+    }
+    rm -rf "$STAGE/Themes"
+    cp -a "$AB_THEMES_DIR/Themes/." "$STAGE/Themes/"
+else
+    stage_themes "$STAGE"
+fi
 
 # cover art databases: not in the package by default since 2026-09-19 - they are 290 MB of the 306, and
 # install.sh downloads them from the download repository (CLAUDE.md, "The download repository"; a Pi needs
 # the network for its install anyway). --with-covers puts them in: the Docker image's copy
 # (AB_COVERS_DB_DIR, see docker/), else the checkout's db/ - git-ignored, so a clean checkout has only
 # stubs (or nothing); the installer says so on the Pi rather than failing.
-COVERS="${AB_COVERS_DB_DIR:-$REPO/db}"
+COVERS="${AB_COVERS_DB_DIR:-$LAUNCHER/db}"
 if [ "$COVERS_IN_PACKAGE" -eq 0 ]; then
     echo "    (cover databases left out - install.sh fetches them; --with-covers includes them)"
 elif ls "$COVERS"/covers*.db >/dev/null 2>&1; then
