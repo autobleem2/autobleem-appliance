@@ -49,12 +49,19 @@ This is a port in progress. Be aware of what is and is not here:
 
 ## Build the package (on the PC)
 
-```bash
-./make_rpi.sh                          # 32-bit: cross-compiles with toolchains/rpi/RPitoolchain.cmake
-./tools/make_rpi_package.sh --arch armhf     # -> build_rpi/autobleem-rpi.tar.gz
+`make_rpi.sh`/`make_rpi64.sh` are the launcher's own (a separate `autobleem2/autobleem` checkout, DOCS-5,
+2026-09-27); `tools/make_rpi_package.sh` is this repo's. Run the cross-compile from inside the launcher
+checkout, then the package script from here with `AB_LAUNCHER_DIR` pointing at it (defaults to the
+directory it is invoked from):
 
-./make_rpi64.sh                        # 64-bit: cross-compiles with toolchains/rpi64/RPi64toolchain.cmake
-./tools/make_rpi_package.sh --arch arm64     # -> build_rpi64/autobleem-rpi-arm64.tar.gz
+```bash
+cd /path/to/autobleem && ./make_rpi.sh          # 32-bit: cross-compiles with toolchains/rpi/RPitoolchain.cmake
+AB_LAUNCHER_DIR="$PWD" /path/to/autobleem-appliance/tools/make_rpi_package.sh --arch armhf
+                                                 # -> build_rpi/autobleem-rpi.tar.gz, in the launcher checkout above
+
+cd /path/to/autobleem && ./make_rpi64.sh        # 64-bit: cross-compiles with toolchains/rpi64/RPi64toolchain.cmake
+AB_LAUNCHER_DIR="$PWD" /path/to/autobleem-appliance/tools/make_rpi_package.sh --arch arm64
+                                                 # -> build_rpi64/autobleem-rpi-arm64.tar.gz
 ```
 
 pcsx-ab is checked in under `payload_linux/Autobleem/bin/emu/` (32-bit) and `payload_linux/Autobleem/bin/emu-arm64/`
@@ -136,12 +143,16 @@ this is what keeps the root from swallowing the whole card), and `autobleem.txt`
 customisation lands on top of them as on a stock image.
 
 ```bash
-./make_rpi.sh   && ./tools/make_rpi_package.sh --arch armhf     # -> build_rpi/autobleem-rpi.tar.gz
-./make_rpi64.sh && ./tools/make_rpi_package.sh --arch arm64     # -> build_rpi64/autobleem-rpi-arm64.tar.gz
+# make_rpi.sh/make_rpi64.sh are the launcher checkout's own; see "Build the package" above for why
+# AB_LAUNCHER_DIR is needed once make_rpi_package.sh is called from a separate autobleem-appliance checkout
+cd /path/to/autobleem && ./make_rpi.sh
+AB_LAUNCHER_DIR="$PWD" /path/to/autobleem-appliance/tools/make_rpi_package.sh --arch armhf     # -> build_rpi/autobleem-rpi.tar.gz
+cd /path/to/autobleem && ./make_rpi64.sh
+AB_LAUNCHER_DIR="$PWD" /path/to/autobleem-appliance/tools/make_rpi_package.sh --arch arm64     # -> build_rpi64/autobleem-rpi-arm64.tar.gz
 
 # on a Linux host with root (losetup/mount) - the two tarballs above, copied over, are the only inputs:
-sudo ./tools/make_rpi_image.sh --arch armhf --package /path/to/autobleem-rpi.tar.gz
-sudo ./tools/make_rpi_image.sh --arch arm64 --package /path/to/autobleem-rpi-arm64.tar.gz
+sudo /path/to/autobleem-appliance/tools/make_rpi_image.sh --arch armhf --package /path/to/autobleem-rpi.tar.gz
+sudo /path/to/autobleem-appliance/tools/make_rpi_image.sh --arch arm64 --package /path/to/autobleem-rpi-arm64.tar.gz
 ```
 
 Each run downloads that architecture's current "latest" Raspberry Pi OS Lite image (sha256-verified against
@@ -265,9 +276,10 @@ The launcher checks AutoBleem's download site once a day (and at every start) fo
 RetroArch and asks on the screen: *Update now*, *Remind me tomorrow* or *Skip this version*. *Update now*
 downloads the package(s) with a progress bar and re-runs the installer with the same screen the first boot
 had; your games, settings, cores and BIOS files stay, and the new launcher rescans the games once on its
-first start. *Options -> Updates* picks what it follows - `stable`
-releases, `latest` (the pre-releases too) or `off` - and the L2+R2 menu's *Software Update* checks on
-the spot. Over ssh the same is `sudo bash install.sh --update` from an unpacked package.
+first start. *Options -> Updates* picks what it follows - `release`
+(the download site's stable builds), `testing` (its pre-releases too), `nightly` (its newest development
+build) or `off` - and the L2+R2 menu's *Software Update* checks on the spot. Over ssh the same is
+`sudo bash install.sh --update` from an unpacked package.
 
 ## Where things go
 
