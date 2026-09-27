@@ -22,6 +22,12 @@
 # (Saturn, Dreamcast, PC-FX, ...), which AutoBleemInstaller.exe fetches on request, same as everything else
 # in the paragraph above - never bundled here.
 #
+# D4's last part (2026-09-27, the owner's call): the one thing that IS fetched from outside GitHub releases
+# is Docs/autobleem-user-manual-en.pdf, the English user manual - English only (~4.4 MB), fetched straight
+# from the download site (autobleem-manuals has no releases of its own; its CI publishes there on every
+# develop push) into the launcher's Docs/ (staged in step 1, below), next to its own Docs/README.txt, which
+# stays the pointer to the site for every other language.
+#
 #   VERSION: e.g. v2.0.0-alpha1
 set -euo pipefail
 VERSION="${1:?version}"
@@ -41,6 +47,31 @@ for need in 028c18a9-ec4b-4632-b2cf-d4e20f252e8f/LUPDATA.BIN Autobleem/start.sh 
             Autobleem/lib/libs.tar.gz Autobleem/bin/autobleem/autobleem-gui; do
     [ -e "$STAGE/$need" ] || { echo "launcher-psc lacks $need - an artifact from before the psc skeleton?" >&2; exit 1; }
 done
+
+# the English user manual PDF (D4's last part, 2026-09-27, the owner's call: English only, ~4.4 MB; Docs/
+# README.txt - the launcher's own file, staged above as part of launcher-psc - stays the pointer to the site
+# for the other languages). autobleem-manuals has no releases: its CI publishes straight to the site
+# (autobleem.retromenele.pl) on every develop push, so this is a plain HTTPS fetch, not fetch_release_assets
+# (which only knows GitHub release assets). A failed fetch fails the whole assemble, loudly, same as every
+# other "$STAGE/$need" check in this script - the package would otherwise ship silently without the manual,
+# indistinguishable from a successful build. AB_MANUAL_PDF_URL overrides the URL (a dry run, or proving the
+# failure path against a 404).
+manual_url="${AB_MANUAL_PDF_URL:-https://autobleem.retromenele.pl/manuals/autobleem-user-manual-en.pdf}"
+manual_pdf="$STAGE/Docs/autobleem-user-manual-en.pdf"
+echo "    fetching the English user manual ($manual_url)"
+if ! curl -sfL --retry 3 --retry-delay 2 -o "$manual_pdf.part" "$manual_url"; then
+    rm -f "$manual_pdf.part"
+    echo "could not fetch the English user manual from $manual_url" >&2
+    exit 1
+fi
+if [ "$(head -c4 "$manual_pdf.part" 2>/dev/null)" != "%PDF" ] || [ "$(wc -c < "$manual_pdf.part")" -lt 1048576 ]; then
+    echo "the fetched user manual from $manual_url is not a valid PDF (or is suspiciously small): $(wc -c < "$manual_pdf.part" 2>/dev/null || echo 0) bytes" >&2
+    rm -f "$manual_pdf.part"
+    exit 1
+fi
+mv "$manual_pdf.part" "$manual_pdf"
+echo "    $(du -h "$manual_pdf" | cut -f1) $manual_pdf"
+
 # the five UI themes (D5, 2026-09-27): autobleem2/autobleem-themes' own release, not the launcher's -
 # AutoBleemInstaller.exe recognises the psc-fs tarball by Themes/ at its top (see the tar step below), so
 # this has to land before that is built
