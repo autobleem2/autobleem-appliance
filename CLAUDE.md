@@ -12,6 +12,24 @@ This repository assembles the complete AutoBleem distribution for each target pl
 
 **Windows** — `assemble-win.sh` builds an NSIS installer package and a portable .zip. No PSC-Bios (Windows has no Network & Controllers provider).
 
+## Local packaging (`tools/make_rpi_package.sh`)
+
+A second, local-only route to a Pi/PC-stick tarball, for a developer with a fresh cross-build and no
+tagged unified release to point `assemble.sh` at - it never touches GitHub releases except for the themes
+(below). DOCS-5 (2026-09-27, `payload_linux/` moved here from the launcher): this repo owns
+`payload_linux/`, `tools/release_assets.sh` and this script; the launcher's own checkout (a separate
+clone, `autobleem2/autobleem`) owns the cross-compiled binary, `src/resources/`, `LICENSE`/
+`THIRD_PARTY_NOTICES.md` and the build's `version.h`. Run it from inside the launcher checkout, or set
+`AB_LAUNCHER_DIR`:
+
+    cd /path/to/autobleem && ./make_rpi.sh && \
+      AB_LAUNCHER_DIR="$PWD" /path/to/autobleem-appliance/tools/make_rpi_package.sh
+
+Themes come from `autobleem2/autobleem-themes`' own release via `tools/release_assets.sh`'s
+`stage_themes()` (the same call `assemble.sh` makes) - needs `gh` authenticated. `AB_THEMES_DIR=<a local
+autobleem-themes checkout>` is a fallback that copies `Themes/` straight from disk, for a machine with no
+`gh` (or offline).
+
 ## Build order and CI
 
 **Merge order constraint** (2026-09-26): the console-tools' new **linux job** (CI matrix building PSC-Bios for rpi, rpi64, pcusb) must merge into develop **first**, produce a nightly release, and have its artifacts available **before** the appliance change (commit 3b41376) merges. Otherwise `assemble.sh` fails looking for `console-tools-<key>-*.tar.gz`. The appliance CI does not need an assemble.yml / fingerprint change—the artifacts are already fetched by the workflows.
