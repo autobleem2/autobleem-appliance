@@ -1,7 +1,8 @@
 # Assemble the appliance payloads from PUBLISHED component artifacts - the compile-once/assemble-many
 # model (docs/repo-split-analysis.md). This workflow compiles NOTHING: assemble.sh fetches each Linux
-# component's release assets (the launcher incl. abpad + themes from autobleem2/autobleem, the two emulators
-# from autobleem2/pcsx-ab and pcsx-abnxt) at one unified VERSION and composes payload_linux into
+# component's release assets (the launcher incl. abpad from autobleem2/autobleem, the five UI themes from
+# their own release, autobleem2/autobleem-themes - D5, 2026-09-27 - and the two emulators from
+# autobleem2/pcsx-ab and pcsx-abnxt) at one unified VERSION and composes payload_linux into
 # autobleem-<platform>-<version>.tar.gz; assemble-psc.sh does the same for the console (platform "psc") from
 # the launcher's psc artifact (which also carries the psc skeleton - see publish-launcher.yml), the console
 # tools (autobleem2/autobleem-console-tools) and the emulators' -psc assets, into
@@ -146,7 +147,7 @@ jobs:
           echo "source_tag=nightly" >> "$GITHUB_OUTPUT"
           # what every component's nightly pre-release holds now: name, size and upload time of each asset
           fp=""
-          for r in autobleem pcsx-ab pcsx-abnxt autobleem-console-tools autobleem-pc-tools proc_unzip ext_store; do
+          for r in autobleem pcsx-ab pcsx-abnxt autobleem-console-tools autobleem-pc-tools proc_unzip ext_store autobleem-themes; do
             id="$(gh api "repos/autobleem2/$r/releases/tags/nightly" --jq .id 2>/dev/null || true)"
             [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::autobleem2/$r has no nightly pre-release yet (its develop CI makes it)"; exit 1; }
             fp+="$(gh api --paginate "repos/autobleem2/$r/releases/$id/assets" --jq '.[] | "'"$r"' \(.name) \(.size) \(.updated_at)"' | sort)"$'\n'

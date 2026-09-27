@@ -131,3 +131,26 @@ stage_console_tools_extension() {
     rm -rf "$tmp"
     echo "    bundled the pscbios extension ($repo@${AB_SOURCE_TAG:-$version}, $stamp)"
 }
+
+# stage_themes DEST - the five themes (autobleem2/autobleem-themes, D5 2026-09-26): its package
+# themes-<v>.tar.gz (archive root Themes/) unpacked to DEST/Themes/. Keeps a version of its own, as a
+# processor/extension does - never tagged by release.py (Eleanor's call on R3, 2026-09-26;
+# docs/decisions.md): a development build (AB_SOURCE_TAG=nightly) takes its rolling `nightly`; a release
+# (AB_SOURCE_TAG unset) takes its latest v* release, which `release.py promote` now refuses to start
+# without, so a missing v* release here is an error, not a silent nightly fallback.
+stage_themes() {
+    local dest="$1" repo=autobleem2/autobleem-themes tag tmp
+    tag="${AB_SOURCE_TAG:-}"
+    if [ -z "$tag" ]; then
+        tag="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null)" || tag=""
+        [ -n "$tag" ] || { echo "$repo has no v* release yet - a release build cannot bundle its nightly (release.py promote should have tagged it)" >&2; return 1; }
+    fi
+    tmp="$(mktemp -d)"
+    AB_SOURCE_TAG="$tag" fetch_release_assets "$repo" "$tag" "themes-*.tar.gz" "$tmp" || return 1
+    mkdir -p "$dest"
+    rm -rf "${dest:?}/Themes"
+    tar -xzf "$tmp"/themes-*.tar.gz -C "$dest"
+    [ -d "$dest/Themes/default" ] || { echo "$repo's package lacks Themes/default" >&2; return 1; }
+    rm -rf "$tmp"
+    echo "    bundled the themes ($repo@$tag)"
+}

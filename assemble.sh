@@ -27,10 +27,13 @@ tar -xzf "$dl"/pcsx-ab-*-"$EMU".tar.gz    -C "$STAGE/Autobleem/bin/emu"
 tar -xzf "$dl"/pcsx-abnxt-*-"$EMU".tar.gz -C "$STAGE/Autobleem/bin/emunxt"
 # 3. the launcher - PUBLISHED artifact (autobleem2/autobleem's publish-launcher.yml), fetched not built.
 #    launcher-<platform>.tar.gz mirrors the payload the launcher repo contributes: Autobleem/bin/autobleem
-#    (gui + resources), Autobleem/bin/abpad (the virtual-gamepad daemon + shim) and Themes/ (the five themes,
-#    which stay in the launcher repo - no theme pack), so it extracts straight over the payload.
+#    (gui + resources) and Autobleem/bin/abpad (the virtual-gamepad daemon + shim) - no Themes/ any more
+#    (D5, 2026-09-27: themes have their own release, autobleem2/autobleem-themes, staged below instead of
+#    riding in the launcher's package) - so it extracts straight over the payload.
 fetch_release_assets autobleem2/autobleem "$VERSION" "launcher-$PLATFORM-*.tar.gz" "$dl"
 tar -xzf "$dl"/launcher-"$PLATFORM"-*.tar.gz -C "$STAGE"
+# the five UI themes (D5, 2026-09-27): autobleem2/autobleem-themes' own release, not the launcher's
+stage_themes "$STAGE"
 # the bundled scanner processors - install.sh copies processors/<name>/ into System/Processors/ (not
 # System/ in the package: payload_linux already has system/, and a case-insensitive filesystem cannot hold both)
 # shellcheck disable=SC2086 - KEYS is a list on purpose
