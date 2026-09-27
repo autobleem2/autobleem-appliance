@@ -86,7 +86,7 @@ tar -xzf "$dl"/console-tools-psc-*.tar.gz -C "$STAGE"
 [ -s "$STAGE/Extensions/pscbios/bin/psc/pscbios.so" ] || [ -s "$STAGE/Apps/pscbios/pscbios" ] || { echo "console-tools-psc lacks PSC-Bios" >&2; exit 1; }
 
 # 3. the two PS1 emulators - PUBLISHED artifacts, fetched not built; pcsx-ab -> bin/emu, pcsx-abnxt -> bin/emunxt
-fetch_release_assets autobleem2/pcsx-ab    "$VERSION" "pcsx-ab-*-psc.tar.gz"    "$dl"
+AB_SOURCE_TAG="$PCSXAB_FROZEN_TAG" fetch_release_assets autobleem2/pcsx-ab "$PCSXAB_FROZEN_TAG" "pcsx-ab-*-psc.tar.gz"    "$dl"
 fetch_release_assets autobleem2/pcsx-abnxt "$VERSION" "pcsx-abnxt-*-psc.tar.gz" "$dl"
 rm -rf "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"
 mkdir -p "$STAGE/Autobleem/bin/emu" "$STAGE/Autobleem/bin/emunxt"

@@ -41,7 +41,7 @@ printf '%s\n' "$VERSION" > "$APP/VERSION"
 
 # 2. the two PS1 emulators: each win64 zip is one folder (pcsx-ab/ or pcsx-abnxt/) holding pcsx-ab.exe, its
 #    DLLs, plugins/, skin/ (and lang/ for nxt) - moved in as emu/ and emunxt/
-fetch_release_assets autobleem2/pcsx-ab    "$VERSION" "pcsx-ab-*-win64.zip"    "$dl"
+AB_SOURCE_TAG="$PCSXAB_FROZEN_TAG" fetch_release_assets autobleem2/pcsx-ab "$PCSXAB_FROZEN_TAG" "pcsx-ab-*-win64.zip"    "$dl"
 fetch_release_assets autobleem2/pcsx-abnxt "$VERSION" "pcsx-abnxt-*-win64.zip" "$dl"
 for pair in "pcsx-ab emu" "pcsx-abnxt emunxt"; do
     set -- $pair

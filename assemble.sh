@@ -17,7 +17,7 @@ work="$(mktemp -d)"; STAGE="$work/$TOP"; mkdir -p "$STAGE"
 cp -a payload_linux/. "$STAGE/"
 # 2. the emulators - PUBLISHED artifacts, fetched not built; pcsx-ab -> bin/emu, pcsx-abnxt -> bin/emunxt
 dl="$work/dl"; mkdir -p "$dl"
-fetch_release_assets autobleem2/pcsx-ab    "$VERSION" "pcsx-ab-*-$EMU.tar.gz"    "$dl"
+AB_SOURCE_TAG="$PCSXAB_FROZEN_TAG" fetch_release_assets autobleem2/pcsx-ab "$PCSXAB_FROZEN_TAG" "pcsx-ab-*-$EMU.tar.gz"    "$dl"
 fetch_release_assets autobleem2/pcsx-abnxt "$VERSION" "pcsx-abnxt-*-$EMU.tar.gz" "$dl"
 # the skeleton's checked-in emulator folders (emu*, emunxt*, one per architecture - make_rpi_package.sh's
 # staging picked one) all go: the device reads bin/emu and bin/emunxt only, filled from the release below
