@@ -1761,6 +1761,38 @@ configure_boot_rpi() {
 }
 
 #*******************************
+# unblock_bluetooth
+#*******************************
+# TOOLS-10, part (b): the owner's Pi 400 had Bluetooth soft-blocked by rfkill, and systemd-rfkill restores
+# that block at every boot from its saved state (/var/lib/systemd/rfkill/<device>:bluetooth, "1" =
+# blocked) - PSC-Bios could then not power the adapter or pair. Clearing a *live* soft block at run time is
+# part (a), PSC-Bios' own job (console-tools); this is the one-time install-side fix, run on a fresh image
+# (autobleem-firstboot.sh calls this installer) and on an existing system (install.sh run by hand). A live
+# `rfkill unblock` alone is not enough - it only lasts until systemd-rfkill next saves state - so any
+# existing save file for a Bluetooth device is corrected here too, the same way the block got in: written
+# straight to "0", so the very next boot restores unblocked regardless of when systemd-rfkill itself would
+# otherwise have saved it. Harmless when rfkill is missing or there is no Bluetooth adapter at all (a PC
+# stick, a VM) - every step here is best-effort, as `rfkill unblock wifi` is in autobleem-firstboot.sh.
+unblock_bluetooth() {
+    local rfkill_state_dir="${RFKILL_STATE_DIR:-/var/lib/systemd/rfkill}"  # overridable, for tests/rc
+    if ! command -v rfkill >/dev/null 2>&1; then
+        log "No rfkill - nothing to unblock (Bluetooth)"
+        return 0
+    fi
+    if ! rfkill list bluetooth 2>/dev/null | grep -q .; then
+        log "No Bluetooth adapter - nothing to unblock"
+        return 0
+    fi
+    run rfkill unblock bluetooth || true
+    local f
+    for f in "$rfkill_state_dir"/*:bluetooth; do
+        [ -e "$f" ] || continue
+        printf '0\n' | write_file "$f" || true
+    done
+    log "Bluetooth unblocked (rfkill)"
+}
+
+#*******************************
 # summary
 #*******************************
 ssh_hint() {
@@ -1845,6 +1877,7 @@ main() {
     install_service
     install_boot_splash
     configure_boot
+    unblock_bluetooth
     sync
     summary
 }
