@@ -67,7 +67,7 @@ cp "$work/pc/AutoBleemWinSetup/AutoBleemWinSetup.exe" "$APP/"
 
 find "$APP" -type f -name placeholder -delete
 
-# 4. the program folder as a zip, AutoBleem/ at its top (as make_win_package.sh --product has always made it)
+# 4. the program folder as a zip, AutoBleem/ at its top (as the launcher repo's tools/make_win_package.sh --product has always made it)
 out_zip="$PWD/autobleem-win-product-$VERSION.zip"; rm -f "$out_zip"
 (cd "$STAGE" && zip -r -9 -q "$out_zip" AutoBleem)
 

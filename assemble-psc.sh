@@ -9,7 +9,7 @@
 # UpdateRoms-<v>.zip (step 5), the first with LastResortRecovery/ inside.
 #
 # This tarball is deliberately NOT self-contained: no RetroArch/ and no cover databases
-# (Autobleem/bin/db/), same as make_psc_package.sh's tarball branch - AutoBleemInstaller.exe
+# (Autobleem/bin/db/), same as the launcher repo's tools/make_psc_package.sh's tarball branch - AutoBleemInstaller.exe
 # (autobleem2/autobleem's apps/installer, which runs on a PC WITH network, unlike the console) fetches those
 # from the download site at install time: RetroArch itself, its cores, the
 # Autobleem/lib/{apps,retroarch,modules} pack, the third-party Apps pack, the BIOS files
@@ -100,7 +100,7 @@ stage_processor autobleem2/proc_unzip unzip "$STAGE/System/Processors" psc
 # the bundled extension, the AutoBleem Store (the owner, 2026-09-25), in the stick's own layout next to PSC-Bios;
 # an update (AutoBleemInstaller, abupdate) replaces the folder whole
 stage_extension autobleem2/ext_store store psc "$STAGE/Extensions" "$STAGE/Autobleem/bin/autobleem/autobleem-gui"
-# 4. VERSION file (tools/make_psc_package.sh's / tools/make_rpi_package.sh's rule: the tag as given - this
+# 4. VERSION file (the launcher repo's tools/make_psc_package.sh's / this repo's tools/make_rpi_package.sh's rule: the tag as given - this
 #    assembler only ever runs against a real published version, so no dirty/hash fallback is needed here).
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 
@@ -117,7 +117,7 @@ chmod +x "$STAGE"/Autobleem/bin/emu/pcsx-ab "$STAGE"/Autobleem/bin/emunxt/pcsx-a
 
 # rooted at the stick's root, no top-level folder (unlike the Linux tarballs): AutoBleemInstaller.exe
 # extracts it straight onto the stick and recognises it by Autobleem/bin/autobleem/autobleem-gui, Themes/
-# and VERSION at the top - make_psc_package.sh's tarball has always been made this way
+# and VERSION at the top - the launcher repo's tools/make_psc_package.sh's tarball has always been made this way
 out="autobleem-psc-$VERSION.tar.gz"
 tar -czf "$out" --owner=0 --group=0 -C "$STAGE" .
 echo "==> $out ($(du -h "$out" | cut -f1)); staged tree:"
