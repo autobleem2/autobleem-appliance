@@ -23,8 +23,10 @@
 # data-partition tree: Autobleem/ - with pcsx-ab and its plugins already in bin/emu (armhf), bin/emu-arm64
 # (arm64) or bin/emu-i386 (the PC stick), put there by pcsx-rearmed-develop's builds - Games/, Apps/) with
 # the built parts filled in: the binary and its resources in Autobleem/bin/autobleem, the cover databases in
-# Autobleem/bin/db, and the autobleem-themes submodule's Themes/ as Themes/. install.sh then copies
-# Autobleem/ Themes/ Games/ Apps/
+# Autobleem/bin/db, and Themes/ from autobleem2/autobleem-themes' own release (D5, 2026-09-26 - the same
+# tools/release_assets.sh:stage_themes() assemble.sh uses, so a local package gets the same themes a real
+# release would; needs `gh` authenticated, and AB_SOURCE_TAG=nightly for a themes release that predates a
+# tagged v*). install.sh then copies Autobleem/ Themes/ Games/ Apps/
 # onto the exFAT partition as they are - the same install.sh serves every architecture, detecting which at
 # runtime (dpkg --print-architecture), and the platform (a Pi or a PC) with it.
 #
@@ -63,6 +65,9 @@ PAYLOAD="$REPO/payload_linux"
 BUILD_DIR="$REPO/$BUILD_SUBDIR"
 STAGE="$BUILD_DIR/package/$TOP"
 TARBALL="$BUILD_DIR/$TARBALL_NAME"
+
+# shellcheck source=tools/release_assets.sh
+. "$REPO/tools/release_assets.sh"   # stage_themes() - the same GitHub-release fetch assemble.sh uses
 
 [ -f "$BUILD_DIR/autobleem-gui" ] || {
     echo "no $BUILD_DIR/autobleem-gui - run $MAKE_SCRIPT first" >&2
@@ -155,9 +160,9 @@ else
     echo "    (no $VERSION_H - the package carries no VERSION file; make_rpi_image.sh will name the image without one)"
 fi
 
-# themes: the converted theme.json layout, from the autobleem-themes submodule (D5, 2026-09-26 - the
-# same five themes that used to live at payload/Themes)
-cp -a "$REPO/autobleem-themes/Themes/." "$STAGE/Themes/"
+# themes: autobleem2/autobleem-themes' own release (D5, 2026-09-26 - the same five themes that used to live
+# at payload/Themes), the same stage_themes() call assemble.sh makes - needs `gh` authenticated.
+stage_themes "$STAGE"
 
 # cover art databases: not in the package by default since 2026-09-19 - they are 290 MB of the 306, and
 # install.sh downloads them from the download repository (CLAUDE.md, "The download repository"; a Pi needs
