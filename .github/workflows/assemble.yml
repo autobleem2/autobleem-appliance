@@ -260,11 +260,14 @@ jobs:
           retention-days: 30
 
   image:
-    # A separate gate from AB_CI_ENABLED: this job needs a runner carrying the psc-build label for THIS repo - registered
-    # 2026-09-23 (psc-build, org-scoped). AB_IMAGE_BUILD_ENABLED keeps it from queuing forever on any repo
-    # whose runner isn't there yet. The org's Default runner group also needed allows_public_repositories
-    # flipped on (off by default - self-hosted runners don't serve public repos otherwise); safe here since
-    # this workflow has no pull_request trigger, only push:tags and workflow_dispatch (both need write access).
+    # A separate gate from AB_CI_ENABLED: this job needs a runner carrying the bleemmachine-image label for
+    # THIS repo. Moved here from psc-build 2026-09-29 (FOUNDRY-17 follow-up, the owner's call - psc-build's
+    # disk was down to 13G free; bleemmachine has 152G) - see company/status/notes/image-build-move-plan.md
+    # in the Foundry repo for the inventory and the pcusb --rootless trial this enabled. AB_IMAGE_BUILD_ENABLED
+    # keeps it from queuing forever on any repo whose runner isn't there yet. The org's Default runner group
+    # also needed allows_public_repositories flipped on (off by default - self-hosted runners don't serve
+    # public repos otherwise); safe here since this workflow has no pull_request trigger, only push:tags and
+    # workflow_dispatch (both need write access).
     #
     # Persists the pristine "before AutoBleem" base across runs on the HOST (not actions/cache - see
     # AB_IMAGE_CACHE_DIR below and the image-build-cache-base memory note) so a repeat build skips the RPi
@@ -280,14 +283,12 @@ jobs:
       # 'matrix'"), so the exclusion happens in `plan` and this job's matrix simply never gets a psc entry.
       matrix:
         platform: ${{ fromJSON(needs.plan.outputs.image_platforms) }}
-    runs-on: [self-hosted, psc-build]
-    # NOT a `container:` job: this runner is itself a Docker container (myoung34/github-runner), and the
-    # Actions runner refuses to nest another container job inside one without container-hooks set up, which
-    # this deployment doesn't have ("Container feature is not supported when runner is already running
-    # inside container" - found on the first real run, 2026-09-23). The workaround every self-hosted job on
-    # this runner needs: launch a SIBLING container by hand over the mounted docker.sock instead, with
-    # -v "$PWD:$PWD" so the path resolves the same for the daemon as for the runner (RUNNER_WORK in
-    # compose.yml exists for exactly this - the runner's workspace is bind-mounted at an identical path).
+    runs-on: [self-hosted, bleemmachine-image]
+    # Still not a `container:` job, but for a simpler reason now than on psc-build: bleemmachine's runner is
+    # a NATIVE process (not itself in Docker, unlike psc-build's myoung34/github-runner container), so a
+    # `container:` job would actually work here - kept as a plain `docker run` anyway so this step's shape
+    # doesn't depend on which host it lands on, and because the persistent host cache dir below is bind-mounted
+    # the same way either way. -v "$PWD:$PWD" keeps paths identical between the runner and the daemon.
     env:
       # xz -T0 -2: the owner's fast-compression call (2026-09-23) - faster still than the scripts' own
       # default of 4 (which was itself already the fast choice over level 6, 7 min vs 12 for ~2% smaller).
@@ -323,7 +324,7 @@ jobs:
           # ask, 2026-09-23: "just after image decompression", "stored on host") - not deferred to a
           # separate copy-to-cache step at the very end, which loses everything if a later step (partition,
           # recompress) fails or is cancelled, as the first real run just did.
-          AB_IMAGE_CACHE_DIR: /home/claude/ab-image-cache
+          AB_IMAGE_CACHE_DIR: /home/gha-runner/ab-image-cache
         run: |
           set -euo pipefail
           rm -rf build_image && mkdir -p build_image/out
@@ -355,13 +356,14 @@ jobs:
                 --version "${{ needs.plan.outputs.version }}"
               ;;
             pcusb)
-              # NOT --rootless here: mmdebstrap --mode=unshare needs /etc/subuid+subgid entries and a
-              # non-root uid with a mapped account (docker/run.sh --userns fakes all of that) - real work
-              # to set up for no real security gain, since this sibling container already reaches the
-              # host's Docker socket (root-equivalent already). --mount (real root, the container's
-              # default when EUID==0) needs only --privileged on the docker run below (found on the first
-              # real run, 2026-09-23: "E: unable to unshare the mount namespace").
-              # NOT --reuse-root here either, still - but for a different reason now (2026-09-26): the
+              # --rootless here, since 2026-09-29 (was --mount + --privileged on psc-build): bleemmachine's
+              # kernel allows unprivileged user namespaces for the runner's own user
+              # (/proc/sys/kernel/unprivileged_userns_clone=1, /etc/subuid+subgid already mapped) - confirmed
+              # by a standalone mmdebstrap --mode=unshare trial before this landed (device nodes, etc/passwd,
+              # both kernel packages all matched a --mount-built reference; see the Foundry move-plan note
+              # linked above). Needs the docker run below to unblock unshare() with seccomp/apparmor, not a
+              # full --privileged container.
+              # NOT --reuse-root here either, still - for the same reason as before (2026-09-26): the
               # AutoBleem package no longer lives inside mmdebstrap's customize-hook at all, so a plain run
               # already skips mmdebstrap on its own whenever $CACHE/root.tar + its .key file match this
               # run's release/mirror/architectures/package list (root_base_cache_key() in
@@ -370,7 +372,7 @@ jobs:
               # risk missing a real root-recipe change (a new package in PACKAGES_COMMON, say). verify_image()
               # still refuses to ship a mismatched package regardless ("the package inside the image is X
               # bytes, the file is Y") - kept as a guard, not the only thing making this safe any more.
-              tools/make_pc_image.sh --mount \
+              tools/make_pc_image.sh --rootless \
                 --package dist/autobleem-pcusb-*.tar.gz \
                 --work "$CACHE" --out build_image/out \
                 --version "${{ needs.plan.outputs.version }}"
@@ -378,14 +380,18 @@ jobs:
           esac
           BUILD_EOF
           chmod +x build_image/run.sh
-          # a sibling container over the mounted docker.sock, not a GHA `container:` job (see the job's own
-          # comment) - the image is public, no login needed. Both $PWD (the checkout) and the persistent
-          # cache dir are bind-mounted at identical paths so they resolve the same for the daemon as for
-          # the runner. --privileged only for pcusb's --mount route (loop devices, grub-install) - rpi's
-          # --rootless needs none of that.
-          priv_arg=()
-          [ "${{ steps.which.outputs.kind }}" = pcusb ] && priv_arg=(--privileged)
-          docker run --rm "${priv_arg[@]}" \
+          # the image is public, no login needed; $PWD and the persistent cache dir are bind-mounted at
+          # identical paths so they resolve the same for the daemon as for the runner. pcusb's --rootless
+          # mmdebstrap needs unshare()/mount-namespace syscalls that Docker's default seccomp+apparmor
+          # profiles block outright even though the host itself allows them for this user (found in the
+          # standalone trial, 2026-09-29) - CAP_SYS_ADMIN plus both profiles off gets there without the
+          # much wider door --privileged opens (no /dev passthrough, no full capability set). rpi's
+          # --rootless (debugfs/mtools) needs none of this.
+          sec_args=()
+          [ "${{ steps.which.outputs.kind }}" = pcusb ] && sec_args=(
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined --cap-add SYS_ADMIN
+          )
+          docker run --rm "${sec_args[@]}" \
             -v "$PWD:$PWD" -w "$PWD" \
             -v "$AB_IMAGE_CACHE_DIR:$AB_IMAGE_CACHE_DIR" \
             -e AB_IMAGE_CACHE_DIR -e AB_XZ_LEVEL \
@@ -396,66 +402,10 @@ jobs:
           name: image-${{ matrix.platform }}
           path: build_image/out/*
           retention-days: 30
-      # push straight onto the real site (autobleem.retromenele.pl), only for a real release. --local:
-      # this runner IS the build server, so it's a plain filesystem copy into REPO_DIR - no ssh, no gh CLI
-      # (never installed on the server on purpose). Also bind-mounts REPO_DIR itself into the sibling
-      # container, since that's what --local writes into directly.
-      - name: Publish the image to the site
-        if: startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.channel == 'nightly'
-        env:
-          AB_REPO_DIR: /home/claude/autobleem-repo
-        run: |
-          set -euo pipefail
-          if [ "${{ needs.plan.outputs.channel }}" = nightly ]; then
-            # a development build's images go next to its packages in nightly/<version>/ - not to
-            # rpi-imager/images/ nor pc/images/. A Pi image brings its rpi_imager_repo.json (merged with the
-            # other architecture's, as for a release below): repo_index.py makes rpi-imager/os_list-nightly.json,
-            # Imager's nightly repository, from it
-            V="${{ needs.plan.outputs.version }}"
-            extra=()
-            if [ "${{ steps.which.outputs.kind }}" = rpi ]; then
-              mkdir -p build_image/site
-              docker run --rm \
-                -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-                ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
-                python3 tools/merge_rpi_imager_json.py build_image/out/rpi_imager_repo.json \
-                  "$AB_REPO_DIR/nightly/$V/rpi_imager_repo.json" build_image/site/rpi_imager_repo.json
-              extra=(build_image/site/rpi_imager_repo.json)
-            fi
-            docker run --rm \
-              -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-              ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
-              bash autobleem-repo-tools/tools/repo_publish.sh --local --partial nightly "$V" build_image/out/*.img.xz "${extra[@]}"
-            exit 0
-          fi
-          case "${{ steps.which.outputs.kind }}" in
-            rpi)
-              # rpi-armhf and rpi-arm64 both publish into the SAME rpi-imager/images/<version>/ - each
-              # build only fills its OWN os_list entry, leaving the other one as raw __PLACEHOLDER__ tokens
-              # (make_rpi_image.sh always starts from the checked-in template) - publishing that as-is
-              # overwrites whichever architecture published first back to broken placeholders (found live
-              # on the site, 2026-09-23). Merge with what's already there before publishing.
-              mkdir -p build_image/site
-              docker run --rm \
-                -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-                ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
-                python3 tools/merge_rpi_imager_json.py build_image/out/rpi_imager_repo.json \
-                  "$AB_REPO_DIR/rpi-imager/images/${{ needs.plan.outputs.version }}/rpi_imager_repo.json" \
-                  build_image/site/rpi_imager_repo.json
-              docker run --rm \
-                -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-                ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
-                bash autobleem-repo-tools/tools/repo_publish.sh --local image \
-                  "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz build_image/site/rpi_imager_repo.json
-              ;;
-            pcusb)
-              docker run --rm \
-                -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-                ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
-                bash autobleem-repo-tools/tools/repo_publish.sh --local pc-image \
-                  "${{ needs.plan.outputs.version }}" build_image/out/*.img.xz
-              ;;
-          esac
+      # Publishing to the site moved to publish-release below, 2026-09-29 - this job no longer runs on
+      # psc-build (the site's own host), so it can't write REPO_DIR directly any more. The image travels
+      # there the same way the payloads already do: as an actions/upload-artifact, downloaded by the
+      # self-hosted job that still has REPO_DIR. See the Foundry move-plan note linked at the top of this job.
 
   release:
     # image is in needs so its artifacts are available when it ran, but it's gated off until a self-hosted
@@ -497,12 +447,15 @@ jobs:
     # auto-updater reads (releases/latest.json / unstable.json, UpdateService) and what the landing page's
     # "Install" panel shows. Missing until now (2026-09-23, the owner caught it): image publishing only ever
     # touched rpi-imager/images/, never this. Self-hosted (needs REPO_DIR), so a separate job from `release`
-    # above (which only needs GITHUB_TOKEN). needs plan+assemble only - doesn't need image, which can be
-    # gated off independently.
+    # above (which only needs GITHUB_TOKEN). Also does the images' site publish since 2026-09-29 (folded in
+    # from the `image` job, which moved to bleemmachine and lost its direct REPO_DIR access - see the Foundry
+    # move-plan note linked from that job) - `needs: image` added so its artifacts (when built) are ready;
+    # `always()` and the result check below keep this job running when `image` is skipped or gated off.
     # sign-win: the signed AutoBleemSetup-<v>.exe (payload-win-setup); always() because a run without win skips it
-    needs: [plan, assemble, sign-win]
+    needs: [plan, assemble, image, sign-win]
     if: >-
       always() && needs.assemble.result == 'success' &&
+      (needs.image.result == 'success' || needs.image.result == 'skipped') &&
       (needs.sign-win.result == 'success' || needs.sign-win.result == 'skipped') &&
       (startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.channel == 'nightly')
     runs-on: [self-hosted, psc-build]
@@ -518,6 +471,15 @@ jobs:
           pattern: payload-*
           path: out
           merge-multiple: true
+      # NOT merge-multiple: rpi-armhf's and rpi-arm64's image artifacts each contain a file literally named
+      # rpi_imager_repo.json - merging them into one flat dir would silently let one overwrite the other.
+      # Kept one subdir per platform (img/image-rpi-armhf/, img/image-rpi-arm64/, img/image-pcusb/) instead.
+      # best-effort: a run with images:false or the image job gated off has nothing to download.
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: image-*
+          path: img
       - name: Publish releases/${{ needs.plan.outputs.version }} to the site
         run: |
           set -euo pipefail
@@ -529,15 +491,73 @@ jobs:
           # from the release whose psc-fs is its own package.
           shopt -s nullglob; files=(out/*.tar.gz out/*.zip out/*.exe)
           kind=(release)
+          nightly=false
           if [ "${{ needs.plan.outputs.channel }}" = nightly ]; then
             # a development build: nightly/<version>/, a piece of it (publish-nightly below finishes it)
             kind=(--partial nightly)
+            nightly=true
           fi
+          BUILD_IMG="ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }}"
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
-            ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
+            "$BUILD_IMG" \
             bash autobleem-repo-tools/tools/repo_publish.sh --local "${kind[@]}" \
               "${{ needs.plan.outputs.version }}" "${files[@]}"
+
+          # the images, one artifact subdir at a time - same publish logic the `image` job used to run
+          # in-place on psc-build, just relocated here now that it's the only self-hosted job with REPO_DIR.
+          V="${{ needs.plan.outputs.version }}"
+          for d in img/image-*/; do
+            [ -d "$d" ] || continue
+            imgxz=("$d"*.img.xz); [ -e "${imgxz[0]}" ] || continue
+            case "$(basename "$d")" in
+              image-rpi-*)
+                if [ "$nightly" = true ]; then
+                  mkdir -p "$d/site"
+                  docker run --rm \
+                    -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                    "$BUILD_IMG" \
+                    python3 tools/merge_rpi_imager_json.py "$d/rpi_imager_repo.json" \
+                      "$AB_REPO_DIR/nightly/$V/rpi_imager_repo.json" "$d/site/rpi_imager_repo.json"
+                  docker run --rm \
+                    -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                    "$BUILD_IMG" \
+                    bash autobleem-repo-tools/tools/repo_publish.sh --local --partial nightly "$V" \
+                      "${imgxz[@]}" "$d/site/rpi_imager_repo.json"
+                else
+                  # rpi-armhf and rpi-arm64 both publish into the SAME rpi-imager/images/<version>/ - each
+                  # build only fills its OWN os_list entry, leaving the other one as raw __PLACEHOLDER__
+                  # tokens (make_rpi_image.sh always starts from the checked-in template) - publishing that
+                  # as-is overwrites whichever architecture published first back to broken placeholders
+                  # (found live on the site, 2026-09-23). Merge with what's already there before publishing.
+                  mkdir -p "$d/site"
+                  docker run --rm \
+                    -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                    "$BUILD_IMG" \
+                    python3 tools/merge_rpi_imager_json.py "$d/rpi_imager_repo.json" \
+                      "$AB_REPO_DIR/rpi-imager/images/$V/rpi_imager_repo.json" "$d/site/rpi_imager_repo.json"
+                  docker run --rm \
+                    -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                    "$BUILD_IMG" \
+                    bash autobleem-repo-tools/tools/repo_publish.sh --local image "$V" \
+                      "${imgxz[@]}" "$d/site/rpi_imager_repo.json"
+                fi
+                ;;
+              image-pcusb)
+                if [ "$nightly" = true ]; then
+                  docker run --rm \
+                    -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                    "$BUILD_IMG" \
+                    bash autobleem-repo-tools/tools/repo_publish.sh --local --partial nightly "$V" "${imgxz[@]}"
+                else
+                  docker run --rm \
+                    -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+                    "$BUILD_IMG" \
+                    bash autobleem-repo-tools/tools/repo_publish.sh --local pc-image "$V" "${imgxz[@]}"
+                fi
+                ;;
+            esac
+          done
 
   publish-nightly:
     # a development build's last publish: every piece (the images, the packages) went up with --partial and
