@@ -451,11 +451,17 @@ jobs:
     # from the `image` job, which moved to bleemmachine and lost its direct REPO_DIR access - see the Foundry
     # move-plan note linked from that job) - `needs: image` added so its artifacts (when built) are ready;
     # `always()` and the result check below keep this job running when `image` is skipped or gated off.
-    # sign-win: the signed AutoBleemSetup-<v>.exe (payload-win-setup); always() because a run without win skips it
+    # sign-win: the signed AutoBleemSetup-<v>.exe (payload-win-setup); always() because a run without win skips it.
+    # `image` is in `needs` only for ordering (its artifacts must exist before the download-artifact step
+    # below runs) - deliberately NOT gated on its result: a failed or gated-off image build must never block
+    # the ordinary payload publish, which has nothing to do with images (Victor Lane's review, 2026-09-29 -
+    # before this fix, a failed image job took the whole release down with it, a real regression from the
+    # pre-move behaviour where the image job's own inline publish failing was self-contained). A missing
+    # image just means the best-effort download-artifact step below finds nothing and the per-platform image
+    # loop skips it - the same "no images built" shape as always.
     needs: [plan, assemble, image, sign-win]
     if: >-
       always() && needs.assemble.result == 'success' &&
-      (needs.image.result == 'success' || needs.image.result == 'skipped') &&
       (needs.sign-win.result == 'success' || needs.sign-win.result == 'skipped') &&
       (startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.channel == 'nightly')
     runs-on: [self-hosted, psc-build]
