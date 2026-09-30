@@ -3,8 +3,8 @@
 // launcher's own splash coming up, which is what follows it (autobleem-session quits plymouth with
 // --retain-splash right before starting the launcher, so this frame stays until SDL takes the display).
 //
-// splash.png is 1280x720, the launcher's own canvas; the installer boots the Pi in 1920x1080 by default
-// (--hdmi-mode), where it is drawn at 1.5x - the launcher does the same with its UI.
+// splash.png is 1920x1080: drawn 1:1 at 1080p (the installer boots the Pi in 1920x1080 by default,
+// --hdmi-mode) and scaled down below that - never up.
 
 Window.SetBackgroundTopColor(0, 0, 0);
 Window.SetBackgroundBottomColor(0, 0, 0);

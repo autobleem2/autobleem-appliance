@@ -400,7 +400,9 @@ inject_payload() {
     install -m 0755 "$REPO_DIR/payload_linux/system/autobleem-firstboot.sh" "$image_dir/autobleem-firstboot.sh"
     # the first boot's screen: the installer's output as a logo, two bars and a box (see the script)
     install -m 0644 "$REPO_DIR/payload_linux/system/autobleem-install-ui.py" "$image_dir/autobleem-install-ui.py"
-    install -m 0644 "$REPO_DIR/payload_linux/system/plymouth/splash.png" "$image_dir/splash.png"
+    mkdir -p "$image_dir/install-ui"
+    cp -r "$REPO_DIR/payload_linux/system/install-ui/." "$image_dir/install-ui/"
+    chmod -R u=rwX,go=rX "$image_dir/install-ui"
     install -m 0644 "$REPO_DIR/payload_linux/system/autobleem-firstboot.service" \
         "$ROOT_MNT/etc/systemd/system/autobleem-firstboot.service"
 
@@ -438,7 +440,13 @@ inject_payload_rootless() {
     put "$PACKAGE" /opt/autobleem-image/autobleem-rpi.tar.gz 0100644
     put "$REPO_DIR/payload_linux/system/autobleem-firstboot.sh" /opt/autobleem-image/autobleem-firstboot.sh 0100755
     put "$REPO_DIR/payload_linux/system/autobleem-install-ui.py" /opt/autobleem-image/autobleem-install-ui.py 0100644
-    put "$REPO_DIR/payload_linux/system/plymouth/splash.png" /opt/autobleem-image/splash.png 0100644
+    # the screen's logos and fonts (payload_linux/system/install-ui/, one level of fonts/ below it)
+    dfs "mkdir /opt/autobleem-image/install-ui"
+    dfs "mkdir /opt/autobleem-image/install-ui/fonts"
+    local ui_dir="$REPO_DIR/payload_linux/system/install-ui" ui_file
+    for ui_file in "$ui_dir"/*.png "$ui_dir"/fonts/*; do
+        put "$ui_file" "/opt/autobleem-image/install-ui/${ui_file#"$ui_dir"/}" 0100644
+    done
     put "$REPO_DIR/payload_linux/system/autobleem-firstboot.service" /etc/systemd/system/autobleem-firstboot.service 0100644
     dfs "mkdir /etc/systemd/system/multi-user.target.wants"
     dfs "rm /etc/systemd/system/multi-user.target.wants/autobleem-firstboot.service" >/dev/null

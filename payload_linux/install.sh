@@ -1586,7 +1586,9 @@ install_update_helper() {
     run install -d -m 0755 "$share" "$share/installer/system"
     run install -m 0755 "$SCRIPT_DIR/system/autobleem-update.sh" /usr/local/bin/autobleem-update
     run install -m 0644 "$SCRIPT_DIR/system/autobleem-install-ui.py" "$share/autobleem-install-ui.py"
-    run install -m 0644 "$SCRIPT_DIR/system/plymouth/splash.png" "$share/splash.png"
+    run rm -rf "$share/install-ui" "$share/splash.png"      # the screen's logos and fonts (splash.png: the old logo)
+    run cp -r "$SCRIPT_DIR/system/install-ui" "$share/install-ui"
+    run chmod -R u=rwX,go=rX "$share/install-ui"
     run install -m 0755 "$SCRIPT_DIR/install.sh" "$share/installer/install.sh"
     run cp -r "$SCRIPT_DIR/system/." "$share/installer/system/"
 }

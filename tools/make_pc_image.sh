@@ -271,7 +271,9 @@ EOF
     # root always has somewhere for it to land.
     install -m 0755 "$REPO_DIR/payload_linux/system/autobleem-firstboot.sh" "$s/opt/autobleem-image/autobleem-firstboot.sh"
     install -m 0644 "$REPO_DIR/payload_linux/system/autobleem-install-ui.py" "$s/opt/autobleem-image/autobleem-install-ui.py"
-    install -m 0644 "$REPO_DIR/payload_linux/system/plymouth/splash.png" "$s/opt/autobleem-image/splash.png"
+    mkdir -p "$s/opt/autobleem-image/install-ui"
+    cp -r "$REPO_DIR/payload_linux/system/install-ui/." "$s/opt/autobleem-image/install-ui/"
+    chmod -R u=rwX,go=rX "$s/opt/autobleem-image/install-ui"
     install -m 0644 "$REPO_DIR/payload_linux/system/autobleem-firstboot.service" "$s/etc/systemd/system/autobleem-firstboot.service"
     ln -sf ../autobleem-firstboot.service "$s/etc/systemd/system/multi-user.target.wants/autobleem-firstboot.service"
     # ssh from the first boot (the owner's rule: once installed the launcher owns tty1 and the keyboard, so

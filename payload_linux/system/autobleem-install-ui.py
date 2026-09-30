@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """The first-boot installer's screen: the AutoBleem logo, two progress bars and the last lines of output,
 drawn straight onto the Linux framebuffer - what an installer with a GUI shows, on a Raspberry Pi OS Lite
-that has nothing installed yet (no X, no SDL, no plymouth, no PIL: python3, /dev/fb0 and the console fonts
-are all a fresh Lite image has, and all this uses).
+that has nothing installed yet (no X, no SDL, no plymouth, no PIL, no FreeType: python3, /dev/fb0 and PSF
+fonts are all a fresh Lite image has, and all this uses). The look is the ab2.0.0 one (PLATFORM-15): graphite
+panels with cut corners, cyan frames, a magenta selection, Red Hat Mono in PSF cells. Its files - the two
+pre-sized logo PNGs and the fonts - are in install-ui/ next to this script (--assets).
 
     bash install.sh ... 2>&1 | tee -a install.log | AB_UI_MARKERS=1 python3 autobleem-install-ui.py \\
-        --logo /opt/autobleem-image/splash.png --tty /dev/tty8
+        --assets /opt/autobleem-image/install-ui --tty /dev/tty8
 
 Reads the installer's output on stdin:
   - "@@phase N/M text" lines (install.sh prints them with AB_UI_MARKERS=1) move the first bar and set the
@@ -52,14 +54,15 @@ try:
 except ImportError:
     fcntl = None
 
-# the ab2 theme's palette (the download site's repo_index.py page uses the same - autobleem2/autobleem-repo)
-NAVY = (6, 26, 58)
-PANEL = (4, 22, 56)
-LINE = (60, 140, 190)
-CYAN = (79, 200, 255)
-INK = (232, 242, 255)
-DIM = (150, 175, 205)
-BLACK = (0, 0, 0)
+# the v02b palette of the ab2.0.0 look (PLATFORM-15)
+BG = (33, 40, 49)           # #212831 the screen (the logo PNGs are composited on it)
+PANEL = (46, 55, 66)        # #2e3742 the output box, the dialog
+WELL = (24, 29, 37)         # #181d25 bar tracks, the input field
+SELROW = (58, 69, 82)       # #3a4552 the selected row
+CYAN = (54, 217, 224)       # #36d9e0 frames, headings, bar fill, "step n of m", "%"
+MAGENTA = (255, 70, 170)    # #ff46aa selection rim, the selected row's hotkey, the input cursor
+INK = (244, 246, 248)       # #f4f6f8 text
+DIM = (154, 164, 178)       # #9aa4b2 secondary text (output lines, footer)
 
 KDSETMODE = 0x4B3A
 KD_TEXT = 0
@@ -214,18 +217,6 @@ def load_png(path):
     return width, height, rows
 
 
-def crop_dark_border(png, threshold=16):
-    """The logo without the black around it: (x0, y0, x1, y1) of the pixels brighter than threshold."""
-    width, height, rows = png
-    x0, y0, x1, y1 = width, height, 0, 0
-    for y, row in enumerate(rows):
-        bright = [x for x in range(width) if max(row[x * 3], row[x * 3 + 1], row[x * 3 + 2]) > threshold]
-        if bright:
-            x0, x1 = min(x0, bright[0]), max(x1, bright[-1] + 1)
-            y0, y1 = min(y0, y), max(y1, y + 1)
-    return (0, 0, width, height) if x1 <= x0 else (x0, y0, x1, y1)
-
-
 #*******************************
 # PSF console fonts
 #*******************************
@@ -296,16 +287,27 @@ class Font:
         return rows
 
 
-FONT_DIR = "/usr/share/consolefonts"
+# what ships with the installer (next to this file): install-ui/logo-install-1080.png and -720.png, and
+# install-ui/fonts/ with Red Hat Mono as PSF2 at the cells 8x16, 9x20, 11x24, 14x32 (tools/make_install_fonts.py)
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "install-ui")
+FONT_DIR = os.path.join(ASSETS_DIR, "fonts")
+SYSTEM_FONT_DIR = "/usr/share/consolefonts"
 
 
-def find_font(px):
-    """The Terminus console font of that height (Lat15 first), else any font of that height, else None."""
+def find_font(px, bold=False):
+    """Red Hat Mono of that cell height (SemiBold for bold), else the Terminus console font of that height
+    (Lat15 first), else any font of that height, else None."""
+    dirs = [d for d in (FONT_DIR, SYSTEM_FONT_DIR) if d]
+    name = ("RedHatMono-SemiBold-%d.psf" if bold else "RedHatMono-%d.psf") % px
+    for d in dirs:
+        if os.path.isfile(os.path.join(d, name)):
+            return Font(os.path.join(d, name))
     for pattern in ("Lat15-Terminus%d*.psf*", "Uni2-Terminus%d*.psf*", "*Terminus%d*.psf*", "*%d*.psf*"):
-        hits = sorted(glob.glob(os.path.join(FONT_DIR, pattern % px)))
-        hits = [h for h in hits if "Bold" not in h] or hits
-        if hits:
-            return Font(hits[0])
+        for d in dirs:
+            hits = sorted(glob.glob(os.path.join(d, pattern % px)))
+            hits = [h for h in hits if "Bold" not in h and "RedHatMono" not in h] or hits
+            if hits:
+                return Font(hits[0])
     return None
 
 
@@ -345,6 +347,20 @@ class Canvas:
         self.fill(x, y + h - t, w, t, rgb)
         self.fill(x, y, t, h, rgb)
         self.fill(x + w - t, y, t, h, rgb)
+
+    def cut(self, x, y, w, h, rgb, k):
+        """A filled rectangle with the top-right and bottom-left corners cut at 45 degrees, k px (the memory
+        card of the v02b look): one fill per row, the right end of row r shortened by max(0, k - r), its left
+        start moved in by max(0, k - (h - 1 - r))."""
+        for r in range(h):
+            right = max(0, k - r)
+            left = max(0, k - (h - 1 - r))
+            self.fill(x + left, y + r, w - left - right, 1, rgb)
+
+    def cut_frame(self, x, y, w, h, frame_rgb, fill_rgb, k, t=2):
+        """A cut-corner shape with a t px rim: the outer cut in the frame colour, the inner one in the fill."""
+        self.cut(x, y, w, h, frame_rgb, k)
+        self.cut(x + t, y + t, w - 2 * t, h - 2 * t, fill_rgb, max(0, k - t))
 
     def blit_rgb(self, x, y, png, crop, scale_num, scale_den):
         """Draw a crop of a decoded PNG, scaled by scale_num/scale_den (nearest neighbour)."""
@@ -403,6 +419,7 @@ class Screen:
         self.big, self.small = big, small
         self.phase, self.phase_index, self.phase_count = "Preparing", 0, 1
         self.percent = None
+        self.percent_label = ""             # the file the percentage belongs to, when the output names it
         self.percent_at = time.monotonic()
         self.lines = []
         self.transient = None
@@ -414,23 +431,21 @@ class Screen:
             return
         w, h = canvas.width, canvas.height
         self.margin = w // 8
-        # the logo: its bright part, scaled to at most 40% of the height and 60% of the width, centred
+        self.hi = h >= 972                  # the 1080p metrics (find_font picks the cells the same way)
+        self.cut_k = 8 if self.hi else 6    # the bars' and the selection's corner cut; the boxes cut twice that
+        self.bar_h = (small.height if small else 16) + 12
+        # the logo: a PNG made for this screen height (logo-install-1080/720.png, already on the screen
+        # colour), blitted 1:1 and centred - no cropping, no scaling
         self.logo_bottom = h // 12
         if logo and logo_cache:
             self.logo, self.logo_bottom = self.load_logo_cache(logo_cache, canvas)
         png = load_png(logo) if logo and self.logo is None else None
         if png is not None:
-            crop = crop_dark_border(png)
-            cw, ch = crop[2] - crop[0], crop[3] - crop[1]
-            num, den = 1, 1
-            max_w, max_h = w * 6 // 10, h * 4 // 10
-            if cw > max_w or ch > max_h:
-                den, num = max(cw * 1000 // max_w, ch * 1000 // max_h), 1000
+            out_w, out_h = png[0], png[1]
+            x, y = max(0, (w - out_w) // 2), h // 16
             # blitted once into the canvas, then kept as raw rows: a frame copies them back with slice
-            # assignments instead of scaling the PNG again (seconds per frame on a Pi in pure Python)
-            x, y = (w - cw * num // den) // 2, h // 16
-            canvas.blit_rgb(x, y, png, crop, num, den)
-            out_w, out_h = cw * num // den, ch * num // den
+            # assignments instead of decoding the PNG again (seconds per frame on a Pi in pure Python)
+            canvas.blit_rgb(x, y, png, (0, 0, out_w, out_h), 1, 1)
             self.logo = []
             for yy in range(y, min(canvas.height, y + out_h)):
                 off = yy * canvas.stride + x * canvas.bytes_pp
@@ -463,7 +478,7 @@ class Screen:
     @staticmethod
     def cache_key(logo_path, canvas):
         st = os.stat(logo_path)
-        return (2, st.st_size, int(st.st_mtime), canvas.width, canvas.height, canvas.bpp, canvas.stride)
+        return (3, st.st_size, int(st.st_mtime), canvas.width, canvas.height, canvas.bpp, canvas.stride)
 
     @staticmethod
     def load_logo_cache(path, canvas):
@@ -490,58 +505,65 @@ class Screen:
     def draw(self):
         c = self.c
         w, h = c.width, c.height
-        c.fill(0, 0, w, h, BLACK)
+        c.fill(0, 0, w, h, BG)
         if self.logo:
             for off, line in self.logo:
                 c.buf[off:off + len(line)] = line
         y = self.logo_bottom
         x0, bw = self.margin, w - 2 * self.margin
+        sw = self.small.width if self.small else 8
+        max_chars = (bw - 2 * (2 + 16)) // sw
         # heading: the phase
-        c.text(x0, y, self.heading(), self.big, INK, BLACK)
-        y += (self.big.height if self.big else 32) + h // 60
-        # bar 1: the phases
-        c.text(x0, y, self.phase_label(), self.small, DIM, BLACK)
-        y += self.line_height + 4
+        c.text(x0, y, self.heading(), self.big, CYAN, BG)
+        y += (self.big.height if self.big else 32) + h // 45
+        # bar 1: the phases - the label at the left, "step n of m" at the right
+        c.text(x0, y, (self.phase if not self.done else "Finished")[:max_chars - 16], self.small, INK, BG)
+        if self.phase_count:
+            step = "step %d of %d" % (self.phase_count if self.done else self.phase_index, self.phase_count)
+            c.text(x0 + bw - len(step) * sw, y, step, self.small, CYAN, BG)
+        y += self.line_height + 2
         self._bar(x0, y, bw, self.phase_permille())
-        y += 28 + h // 40
-        # bar 2: inside the phase
-        if self.percent is not None:
-            c.text(x0, y, "%d%%" % self.percent, self.small, DIM, BLACK)
+        y += self.bar_h + h // 40
+        # bar 2: inside the phase - the file (or "working...") at the left, the percentage at the right
+        if self.done:
+            label = "Done"
+        elif self.percent is not None:
+            label = self.percent_label
         else:
-            c.text(x0, y, "working...", self.small, DIM, BLACK)
-        y += self.line_height + 4
+            label = "working..."
+        c.text(x0, y, label[:max_chars - 8], self.small, DIM, BG)
+        if self.percent is not None:
+            pct = "%d%%" % self.percent
+            c.text(x0 + bw - len(pct) * sw, y, pct, self.small, CYAN, BG)
+        y += self.line_height + 2
         if self.percent is not None:
             self._bar(x0, y, bw, self.percent * 10)
         else:
             self._pulse(x0, y, bw)
-        y += 28 + h // 30
+        y += self.bar_h + h // 30
         # the output box
-        box_h = self.box_lines * self.line_height + 16
-        c.fill(x0, y, bw, box_h, PANEL)
-        c.frame(x0, y, bw, box_h, LINE, 2)
+        box_h = self.box_lines * self.line_height + 2 * (2 + 12)
+        c.cut_frame(x0, y, bw, box_h, CYAN, PANEL, 2 * self.cut_k, 2)
         shown = self.shown_lines(self.box_lines)
-        max_chars = (bw - 24) // (self.small.width if self.small else 8)
-        ty = y + 8
-        for line in shown:
-            c.text(x0 + 12, ty, line[:max_chars], self.small, DIM, PANEL)
+        ty = y + 2 + 12
+        for i, line in enumerate(shown):
+            c.text(x0 + 18, ty, line[:max_chars], self.small, INK if i == len(shown) - 1 else DIM, PANEL)
             ty += self.line_height
 
     def _bar(self, x, y, w, permille):
         c = self.c
-        c.fill(x, y, w, 28, PANEL)
-        c.frame(x, y, w, 28, LINE, 2)
-        fill = (w - 8) * max(0, min(1000, permille)) // 1000
+        c.cut_frame(x, y, w, self.bar_h, CYAN, WELL, self.cut_k, 2)
+        fill = (w - 12) * max(0, min(1000, permille)) // 1000
         if fill > 0:
-            c.fill(x + 4, y + 4, fill, 20, CYAN)
+            c.cut(x + 6, y + 6, fill, self.bar_h - 12, CYAN, max(0, self.cut_k - 6))
 
     def _pulse(self, x, y, w):
         c = self.c
-        c.fill(x, y, w, 28, PANEL)
-        c.frame(x, y, w, 28, LINE, 2)
-        span = (w - 8) // 5
+        c.cut_frame(x, y, w, self.bar_h, CYAN, WELL, self.cut_k, 2)
+        span = (w - 12) // 5
         t = time.monotonic() % 2.0
-        pos = int((w - 8 - span) * (t if t < 1.0 else 2.0 - t))
-        c.fill(x + 4 + pos, y + 4, span, 20, CYAN)
+        pos = int((w - 12 - span) * (t if t < 1.0 else 2.0 - t))
+        c.cut(x + 6 + pos, y + 6, span, self.bar_h - 12, CYAN, max(0, self.cut_k - 6))
 
 
 #*******************************
@@ -560,12 +582,16 @@ def feed(screen, chunk, ends_with_cr):
     if m:
         screen.phase_index, screen.phase_count, screen.phase = int(m.group(1)), int(m.group(2)), m.group(3)
         screen.percent = None
+        screen.percent_label = ""
         screen.transient = None
         return
     pct = PERCENT.findall(text)
     if pct:
         screen.percent = min(100, int(pct[-1]))
         screen.percent_at = time.monotonic()
+        name = re.split(r"[\s\[]", text, maxsplit=1)[0]     # "retroarch.deb  62%[===>" names its file; "[ 12/694]  2%" not
+        if re.search(r"[A-Za-z]", name) and "%" not in name:
+            screen.percent_label = name
     if text.startswith("==>"):
         text = text[3:].strip()
     if ends_with_cr:
@@ -600,53 +626,61 @@ class Dialog:
     def draw(self):
         s, c = self.s, self.s.c
         w, h = c.width, c.height
-        c.fill(0, 0, w, h, BLACK)
+        c.fill(0, 0, w, h, BG)
         if s.logo:
             for off, line in s.logo:
                 c.buf[off:off + len(line)] = line
         big, small, lh = s.big, s.small, s.line_height
+        sw = small.width if small else 8
         x0, bw = s.margin, w - 2 * s.margin
         y = s.logo_bottom
         # the panel: title, text, then the list or the field, then the footer
+        pad = 2 + 22
         rows = min(self.rows, len(self.items))
-        body = len(self.lines) * lh + (rows * (lh + 6) if rows else 0) + (lh + 20 if self.field is not None else 0)
-        ph = 16 + (big.height if big else 32) + 12 + body + 8 + 12 + lh + 16
-        c.fill(x0, y, bw, ph, PANEL)
-        c.frame(x0, y, bw, ph, LINE, 2)
-        ty = y + 16
-        c.text(x0 + 24, ty, self.title, big, INK, PANEL)
-        ty += (big.height if big else 32) + 12
-        max_chars = (bw - 48) // (small.width if small else 8)
+        body = len(self.lines) * lh + (rows * (lh + 10) if rows else 0) + (lh + 20 if self.field is not None else 0)
+        ph = pad + (big.height if big else 32) + 14 + body + 16 + lh + pad
+        c.cut_frame(x0, y, bw, ph, CYAN, PANEL, 2 * s.cut_k, 2)
+        ty = y + pad
+        c.text(x0 + pad, ty, self.title, big, CYAN, PANEL)
+        ty += (big.height if big else 32) + 14
+        max_chars = (bw - 2 * pad) // sw
         for line in self.lines:
-            c.text(x0 + 24, ty, line[:max_chars], small, DIM, PANEL)
+            c.text(x0 + pad, ty, line[:max_chars], small, INK, PANEL)
             ty += lh
-        ty += 8
+        ty += 6
         if rows:
             first = max(0, min(self.selected - rows // 2, len(self.items) - rows))
             for i in range(first, first + rows):
                 key, label = self.items[i]
-                text = ("  %-3s %s" % (key + ")", label)) if key else "      " + label
-                if i == self.selected:
-                    c.fill(x0 + 16, ty - 2, bw - 32, lh + 4, CYAN)
-                    c.text(x0 + 24, ty, text[:max_chars], small, BLACK, CYAN)
+                chosen = i == self.selected
+                bg = PANEL
+                if chosen:
+                    # the selection: a magenta rim on a lighter graphite, never a filled bar
+                    bg = SELROW
+                    c.cut_frame(x0 + pad - 10, ty - 3, bw - 2 * pad + 20, lh + 6, MAGENTA, SELROW, s.cut_k, 2)
+                tx = x0 + pad + 4
+                if key:
+                    tx += c.text(tx, ty, key, small, MAGENTA if chosen else CYAN, bg) + 2 * sw
                 else:
-                    c.text(x0 + 24, ty, text[:max_chars], small, INK, PANEL)
-                ty += lh + 6
-            if len(self.items) > rows:
-                c.text(x0 + bw - 24 - 14 * (small.width if small else 8), ty - lh - 6,
-                       "%d/%d" % (self.selected + 1, len(self.items)), small, DIM, PANEL)
+                    tx += 3 * sw
+                c.text(tx, ty, label[:max_chars - (tx - x0 - pad) // sw], small, INK, bg)
+                ty += lh + 10
         if self.field is not None:
+            fh = lh + 12
             shown = ("*" * len(self.field)) if self.secret else self.field
-            shown = shown[-(max_chars - 4):] + "_"
-            c.fill(x0 + 24, ty + 4, bw - 48, lh + 12, NAVY)
-            c.frame(x0 + 24, ty + 4, bw - 48, lh + 12, LINE, 1)
-            c.text(x0 + 32, ty + 10, shown, small, INK, NAVY)
-            ty += lh + 20
-        ty += 12
+            shown = shown[-(max_chars - 6):]
+            c.cut_frame(x0 + pad, ty + 2, bw - 2 * pad, fh, CYAN, WELL, s.cut_k, 1)
+            tx = x0 + pad + 12 + c.text(x0 + pad + 12, ty + 8, shown, small, INK, WELL)
+            c.fill(tx + 1, ty + 8, sw, small.height if small else 16, MAGENTA)      # the cursor: one cell
+            ty += fh + 8
+        ty += 16
         footer = self.footer
         if self.timeout:
             footer = "%s   (%d s)" % (footer, self.timeout) if footer else "%d s" % self.timeout
-        c.text(x0 + 24, ty, footer[:max_chars], small, DIM, PANEL)
+        c.text(x0 + pad, ty, footer[:max_chars - (10 if len(self.items) > rows else 0)], small, DIM, PANEL)
+        if len(self.items) > rows:
+            count = "%d/%d" % (self.selected + 1, len(self.items))
+            c.text(x0 + bw - pad - len(count) * sw, ty, count, small, DIM, PANEL)
 
 
 class Keyboard:
@@ -1081,13 +1115,19 @@ def run_dialog(args, screen, backend, tty):
 def main():
     global FONT_DIR
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--logo", default="", help="the PNG with the logo (the plymouth splash)")
+    # the old way to name the logo: accepted and ignored, so an autobleem-update.sh from before the new look
+    # that is still running when this file replaces the old one does not fail on it
+    ap.add_argument("--logo", default="", help=argparse.SUPPRESS)
+    ap.add_argument("--assets", default=ASSETS_DIR,
+                    help="the folder with logo-install-1080.png, logo-install-720.png and fonts/ "
+                         "(default: install-ui next to this script)")
     ap.add_argument("--fb", default="/dev/fb0")
     ap.add_argument("--tty", default="", help="the console: switched to graphics mode, and where the keys come from")
     ap.add_argument("--render", default="", help="write the final frame to this PPM file instead of the framebuffer")
     ap.add_argument("--size", default="", help="WxH for --render (default 1920x1080; columns x rows, 100x30, for --backend text)")
     ap.add_argument("--fps", type=float, default=4.0)
-    ap.add_argument("--fonts", default=FONT_DIR, help="where the PSF console fonts are")
+    ap.add_argument("--fonts", default="", help="where the PSF fonts are (default: fonts/ in --assets; "
+                                                "the console's own fonts are the fallback)")
     ap.add_argument("--text-mode", action="store_true",
                     help="put the console back in text mode at exit (the default keeps the picture: the next "
                          "dialog or the reboot takes over)")
@@ -1113,7 +1153,7 @@ def main():
     args.mode = args.mode or "progress"
     if not hasattr(args, "secret"):
         args.secret = False
-    FONT_DIR = args.fonts
+    FONT_DIR = args.fonts or os.path.join(args.assets, "fonts")
 
     tty = None
     if args.backend == "text":
@@ -1163,9 +1203,12 @@ def main():
 
         canvas = Canvas(width, height, bpp, stride)
         scale = height / 1080.0
-        big = find_font(32 if scale >= 0.9 else 24)
+        big = find_font(32 if scale >= 0.9 else 24, bold=True)
         small = find_font(20 if scale >= 0.9 else 16) or find_font(16)
-        screen = Screen(canvas, args.logo, big, small, args.logo + ".cache" if args.logo and fb is not None else "")
+        logo = os.path.join(args.assets, "logo-install-%s.png" % ("1080" if scale >= 0.9 else "720"))
+        if not os.path.isfile(logo):
+            logo = ""
+        screen = Screen(canvas, logo, big, small, logo + ".cache" if logo and fb is not None else "")
         backend = FbBackend(canvas, fb, fb_var)
 
         if args.tty and fb is not None and fcntl is not None:
