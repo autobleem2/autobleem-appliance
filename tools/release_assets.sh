@@ -10,14 +10,26 @@
 #
 # AB_SOURCE_TAG, when set, is the release fetched from instead of TAG - `nightly` for a development build
 # (every component's rolling pre-release of its develop branch), while VERSION still names what is assembled.
+# A preview (PLATFORM-20) is a development build too: AB_PREVIEW_REPOS lists the components built from the
+# preview's branch, which come from their rolling `preview` pre-release instead of `nightly` (resolve_tag).
 
 # pcsx-ab is frozen (the owner, 2026-09-27): every package, a nightly and a release alike, takes its
 # v1.0-final release - the build nightly 188 shipped - never its nightly and never the unified VERSION. The
 # one other place that names it is assemble.yml's nightly fingerprint.
 PCSXAB_FROZEN_TAG=v1.0-final
 
+# resolve_tag REPO TAG - TAG, or `preview` when TAG is `nightly` and REPO is one of AB_PREVIEW_REPOS
+resolve_tag() {
+    local repo="$1" tag="$2"
+    if [ "$tag" = nightly ]; then
+        case " ${AB_PREVIEW_REPOS:-} " in *" ${repo##*/} "*) tag=preview ;; esac
+    fi
+    echo "$tag"
+}
+
 fetch_release_assets() {
     local repo="$1" tag="${AB_SOURCE_TAG:-$2}" glob="$3" dir="$4" id aid name n=0
+    tag="$(resolve_tag "$repo" "$tag")"
     id="$(gh api "repos/$repo/releases/tags/$tag" --jq .id)" || { echo "no release $tag in $repo" >&2; return 1; }
     while IFS=$'\t' read -r aid name; do
         [ -n "$aid" ] || continue

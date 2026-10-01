@@ -61,10 +61,18 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: release = the components' v* releases; nightly = their rolling develop builds
+        description: release = the components' v* releases; nightly = their rolling develop builds; preview = a feature branch's build
         type: choice
-        options: [release, nightly]
+        options: [release, nightly, preview]
         default: release
+      preview_repos:
+        description: preview only - the components built from the branch (space separated repo names); the rest come from their nightly
+        type: string
+        default: ''
+      branch:
+        description: preview only - the branch the preview was built from (names the build)
+        type: string
+        default: ''
       version:
         description: the unified component version to assemble (e.g. v2.0.0-alpha1) - defaults to the pushed tag; not used for nightly
         type: string
@@ -83,8 +91,10 @@ on:
 
 # never cancel: one run going, at most one pending (GitHub replaces an older pending run with a newer one) -
 # a debounce, not a kill switch. A schedule, a repository_dispatch and a dispatch on develop share the group.
+# A preview has its own group, so a nightly arriving meanwhile never replaces a pending preview (the site's
+# publish jobs still take turns: they share the one psc-build runner).
 concurrency:
-  group: assemble-${{ github.ref }}
+  group: assemble-${{ github.ref }}${{ inputs.channel == 'preview' && '-preview' || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -97,7 +107,10 @@ jobs:
       image_platforms: ${{ steps.p.outputs.image_json }}
       version: ${{ steps.v.outputs.version }}
       channel: ${{ steps.v.outputs.channel }}
+      # true for a development build (nightly or preview): rolling component builds, a --partial publish
+      dev: ${{ steps.v.outputs.dev }}
       source_tag: ${{ steps.v.outputs.source_tag }}
+      preview_repos: ${{ steps.v.outputs.preview_repos }}
       sources: ${{ steps.v.outputs.sources }}
       skip: ${{ steps.v.outputs.skip }}
       images: ${{ steps.p.outputs.images }}
@@ -131,12 +144,17 @@ jobs:
           # so the exclusion has to happen here instead of inside that job.
           echo "image_json=$(printf '%s\n' $p | { grep -v -e '^psc$' -e '^win$' || true; } | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
       - id: v
+        env:
+          PREVIEW_REPOS: ${{ inputs.preview_repos }}
+          BRANCH: ${{ inputs.branch }}
         run: |
           set -euo pipefail
           channel="${{ inputs.channel }}"
           case "${{ github.event_name }}" in schedule|repository_dispatch) channel=nightly ;; esac
           [ -n "$channel" ] || channel=release
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          dev=true; [ "$channel" != release ] || dev=false
+          echo "dev=$dev" >> "$GITHUB_OUTPUT"
           if [ "$channel" = release ]; then
             v="${{ inputs.version }}"
             if [ -z "$v" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="$GITHUB_REF_NAME"; fi
@@ -145,23 +163,40 @@ jobs:
             exit 0
           fi
           echo "source_tag=nightly" >> "$GITHUB_OUTPUT"
-          # what every component's nightly pre-release holds now: name, size and upload time of each asset
+          # a preview (PLATFORM-20): the components built from the branch come from their rolling `preview`
+          # pre-release, every other one from its `nightly` (tools/release_assets.sh, AB_PREVIEW_REPOS)
+          preview=""
+          if [ "$channel" = preview ]; then
+            [[ "$BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::a preview needs the branch input (got '$BRANCH')"; exit 1; }
+            preview="$(echo $PREVIEW_REPOS)"
+            [ -n "$preview" ] || { echo "::error::a preview needs preview_repos (the components built from $BRANCH)"; exit 1; }
+          fi
+          echo "preview_repos=$preview" >> "$GITHUB_OUTPUT"
+          # what every component's pre-release holds now: name, size and upload time of each asset
           fp=""
           # pcsx-ab is frozen at v1.0-final (tools/release_assets.sh, PCSXAB_FROZEN_TAG): no nightly of it to read
           fp+="pcsx-ab v1.0-final frozen"$'\n'
           for r in autobleem pcsx-abnxt autobleem-console-tools autobleem-pc-tools proc_unzip ext_store autobleem-themes; do
-            id="$(gh api "repos/autobleem2/$r/releases/tags/nightly" --jq .id 2>/dev/null || true)"
-            [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::autobleem2/$r has no nightly pre-release yet (its develop CI makes it)"; exit 1; }
-            fp+="$(gh api --paginate "repos/autobleem2/$r/releases/$id/assets" --jq '.[] | "'"$r"' \(.name) \(.size) \(.updated_at)"' | sort)"$'\n'
+            # (a nightly's lines keep their old label, so a nightly's name does not change with this)
+            t=nightly; l="$r"; case " $preview " in *" $r "*) t=preview; l="$r@preview" ;; esac
+            id="$(gh api "repos/autobleem2/$r/releases/tags/$t" --jq .id 2>/dev/null || true)"
+            [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::autobleem2/$r has no $t pre-release yet"; exit 1; }
+            fp+="$(gh api --paginate "repos/autobleem2/$r/releases/$id/assets" --jq '.[] | "'"$l"' \(.name) \(.size) \(.updated_at)"' | sort)"$'\n'
           done
           # the build is named after the launcher's (launcher-psc-<git describe>.tar.gz) plus what it was built
           # from: -n<the components' fingerprint>. A night on which only an emulator or a tool changed is then a
           # new name too - an installed nightly compares its VERSION with this and sees the update (named after
           # the launcher alone, it saw the same version and was never offered it)
-          d="$(printf '%s' "$fp" | sed -n 's/^autobleem launcher-psc-\(.*\)\.tar\.gz .*/\1/p' | head -n1)"
-          [ -n "$d" ] || { echo "::error::no launcher-psc asset on autobleem2/autobleem@nightly"; exit 1; }
+          d="$(printf '%s' "$fp" | sed -n 's/^autobleem\(@preview\)\{0,1\} launcher-psc-\(.*\)\.tar\.gz .*/\2/p' | head -n1)"
+          [ -n "$d" ] || { echo "::error::no launcher-psc asset on autobleem2/autobleem's pre-release"; exit 1; }
           sum="$(printf '%s' "$fp" | sha256sum | cut -c1-16)"
           v="$d-n${sum:0:6}"
+          # a preview is named after its branch: preview-feature-ab-gui-<fingerprint> (the launcher's own
+          # preview-<sha> is in the watermark)
+          if [ "$channel" = preview ]; then
+            slug="$(tr -c 'A-Za-z0-9.\n' '-' <<< "$BRANCH" | tr 'A-Z' 'a-z')"
+            v="preview-${slug:0:40}-${sum:0:6}"
+          fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "sources=$sum" >> "$GITHUB_OUTPUT"
           printf '%s' "$fp"
@@ -171,14 +206,14 @@ jobs:
           # more (a sources.json from before those keys was a full build)
           skip=false
           if [ "${{ github.event_name }}" != workflow_dispatch ] || [ "${{ inputs.skip_unchanged }}" = true ]; then
-            src="$(curl -sf "https://autobleem.retromenele.pl/nightly/$v/sources.json" || true)"
+            src="$(curl -sf "https://autobleem.retromenele.pl/$channel/$v/sources.json" || true)"
             pub="$(sed -n 's/.*"platforms": *"\([^"]*\)".*/\1/p' <<< "$src")"
             [ -n "$pub" ] || pub="rpi-armhf rpi-arm64 pcusb psc win"
             covered=true
             for x in ${{ steps.p.outputs.list }}; do case " $pub " in *" $x "*) ;; *) covered=false ;; esac; done
             if grep -q "\"$sum\"" <<< "$src" && [ "$covered" = true ] &&
                { [ "${{ steps.p.outputs.images }}" = false ] || ! grep -q '"images": *false' <<< "$src"; }; then
-              skip=true; echo "nightly/$v was built from these same components - nothing to do"
+              skip=true; echo "$channel/$v was built from these same components - nothing to do"
             fi
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
@@ -197,6 +232,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       # empty for a release (the components' VERSION release), `nightly` for the development build
       AB_SOURCE_TAG: ${{ needs.plan.outputs.source_tag }}
+      # a preview: these components come from their `preview` pre-release instead of `nightly`
+      AB_PREVIEW_REPOS: ${{ needs.plan.outputs.preview_repos }}
     steps:
       - uses: actions/checkout@v7
       - name: Assemble ${{ matrix.platform }} @ ${{ needs.plan.outputs.version }}
@@ -303,7 +340,7 @@ jobs:
       # the site-publish tooling (repo_publish.sh + its page-generator merge), only needed on a real
       # release - a separate checkout since it split into its own repo (autobleem-repo).
       - uses: actions/checkout@v7
-        if: startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.channel == 'nightly'
+        if: startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.dev == 'true'
         with:
           repository: autobleem2/autobleem-repo
           path: autobleem-repo-tools
@@ -395,7 +432,7 @@ jobs:
             -v "$PWD:$PWD" -w "$PWD" \
             -v "$AB_IMAGE_CACHE_DIR:$AB_IMAGE_CACHE_DIR" \
             -e AB_IMAGE_CACHE_DIR -e AB_XZ_LEVEL \
-            ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }} \
+            ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.dev == 'true' && 'develop' || 'latest' }} \
             bash "$PWD/build_image/run.sh"
       - uses: actions/upload-artifact@v7
         with:
@@ -463,7 +500,7 @@ jobs:
     if: >-
       always() && needs.assemble.result == 'success' &&
       (needs.sign-win.result == 'success' || needs.sign-win.result == 'skipped') &&
-      (startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.channel == 'nightly')
+      (startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.dev == 'true')
     runs-on: [self-hosted, psc-build]
     env:
       AB_REPO_DIR: /home/claude/autobleem-repo
@@ -505,12 +542,14 @@ jobs:
           shopt -s nullglob; files=(out/*.tar.gz out/*.zip out/*.exe)
           kind=(release)
           nightly=false
-          if [ "${{ needs.plan.outputs.channel }}" = nightly ]; then
-            # a development build: nightly/<version>/, a piece of it (publish-nightly below finishes it)
-            kind=(--partial nightly)
+          ch="${{ needs.plan.outputs.channel }}"
+          if [ "${{ needs.plan.outputs.dev }}" = true ]; then
+            # a development build: nightly/<version>/ (or preview/<version>/), a piece of it (publish-nightly
+            # below finishes it)
+            kind=(--partial "$ch")
             nightly=true
           fi
-          BUILD_IMG="ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.channel == 'nightly' && 'develop' || 'latest' }}"
+          BUILD_IMG="ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.dev == 'true' && 'develop' || 'latest' }}"
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
             "$BUILD_IMG" \
@@ -531,11 +570,11 @@ jobs:
                     -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
                     "$BUILD_IMG" \
                     python3 tools/merge_rpi_imager_json.py "$d/rpi_imager_repo.json" \
-                      "$AB_REPO_DIR/nightly/$V/rpi_imager_repo.json" "$d/site/rpi_imager_repo.json"
+                      "$AB_REPO_DIR/$ch/$V/rpi_imager_repo.json" "$d/site/rpi_imager_repo.json"
                   docker run --rm \
                     -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
                     "$BUILD_IMG" \
-                    bash autobleem-repo-tools/tools/repo_publish.sh --local --partial nightly "$V" \
+                    bash autobleem-repo-tools/tools/repo_publish.sh --local --partial "$ch" "$V" \
                       "${imgxz[@]}" "$d/site/rpi_imager_repo.json"
                 else
                   # rpi-armhf and rpi-arm64 both publish into the SAME rpi-imager/images/<version>/ - each
@@ -561,7 +600,7 @@ jobs:
                   docker run --rm \
                     -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
                     "$BUILD_IMG" \
-                    bash autobleem-repo-tools/tools/repo_publish.sh --local --partial nightly "$V" "${imgxz[@]}"
+                    bash autobleem-repo-tools/tools/repo_publish.sh --local --partial "$ch" "$V" "${imgxz[@]}"
                 else
                   docker run --rm \
                     -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
@@ -585,7 +624,7 @@ jobs:
     needs: [plan, assemble, image, publish-release]
     # always(): a run of platforms without an image (psc, win) skips `image`, which would skip this job too
     if: >-
-      always() && needs.plan.outputs.channel == 'nightly' && needs.publish-release.result == 'success' &&
+      always() && needs.plan.outputs.dev == 'true' && needs.publish-release.result == 'success' &&
       (needs.image.result == 'success' || needs.image.result == 'skipped')
     runs-on: [self-hosted, psc-build]
     env:
@@ -595,7 +634,7 @@ jobs:
         with:
           repository: autobleem2/autobleem-repo
           path: autobleem-repo-tools
-      - name: Publish nightly/${{ needs.plan.outputs.version }} as the development build
+      - name: Publish ${{ needs.plan.outputs.channel }}/${{ needs.plan.outputs.version }} as the development build
         run: |
           set -euo pipefail
           rm -rf out
@@ -606,6 +645,6 @@ jobs:
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
             ghcr.io/autobleem2/autobleem-build:develop \
-            bash autobleem-repo-tools/tools/repo_publish.sh --local nightly \
+            bash autobleem-repo-tools/tools/repo_publish.sh --local "${{ needs.plan.outputs.channel }}" \
               "${{ needs.plan.outputs.version }}" out/sources.json
           rm -rf out
