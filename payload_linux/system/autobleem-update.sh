@@ -20,7 +20,7 @@ PENDING="$UPDATES/pending.json"
 LOG="$DATA_MOUNT/System/Logs/update.log"
 SHARE=/usr/local/share/autobleem
 UI="$SHARE/autobleem-install-ui.py"
-LOGO="$SHARE/splash.png"
+ASSETS="$SHARE/install-ui"    # the screen's logos and fonts
 INSTALLER_COPY="$SHARE/installer/install.sh"   # the installed release's own installer, for a RetroArch-only update
 # the package is unpacked on the root filesystem, not the data partition: exFAT cannot take the archive's
 # ownership (tar, run as root, restores uid/gid by default and exits 2 on "Operation not permitted") nor
@@ -55,7 +55,7 @@ if [ -f "$UI" ] && command -v python3 >/dev/null 2>&1; then
     [ "$(tr -d '[:space:]' <"$UI_MODE_FILE" 2>/dev/null)" = text ] && BACKEND=text
     [ "$BACKEND" = fb ] && [ ! -e /dev/fb0 ] && BACKEND=text
 fi
-ui() { python3 "$UI" --backend "$BACKEND" --logo "$LOGO" --tty "$TTY" --backtitle "AutoBleem - update" "$@"; }
+ui() { python3 "$UI" --backend "$BACKEND" --assets "$ASSETS" --tty "$TTY" --backtitle "AutoBleem - update" "$@"; }
 
 # what to run: the new package's install.sh over the unpacked tree, or the installed release's for a
 # RetroArch-only update

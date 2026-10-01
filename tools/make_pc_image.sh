@@ -251,16 +251,21 @@ EOF
     cat >"$s/etc/default/grub" <<'EOF'
 # AutoBleem PC stick - install.sh (configure_boot_pcusb) rewrites the keys below on every run
 GRUB_DEFAULT=0
-GRUB_TIMEOUT=2
-GRUB_TIMEOUT_STYLE=hidden
+GRUB_TIMEOUT=3
+GRUB_TIMEOUT_STYLE=menu
+GRUB_TERMINAL_OUTPUT=gfxterm
 GRUB_DISTRIBUTOR=AutoBleem
 GRUB_CMDLINE_LINUX_DEFAULT="consoleblank=0 quiet loglevel=3 logo.nologo vt.global_cursor_default=0 splash plymouth.ignore-serial-consoles"
 GRUB_CMDLINE_LINUX=""
-GRUB_GFXMODE=auto
+GRUB_GFXMODE=1920x1080x32,1024x768x32,auto
 GRUB_GFXPAYLOAD_LINUX=keep
+GRUB_THEME=/boot/grub/themes/autobleem/theme.txt
 GRUB_DISABLE_OS_PROBER=true
 EOF
     install -m 0755 "$SCRIPT_DIR/pc_image/10_autobleem" "$s/etc/grub.d/10_autobleem"
+    # the menu theme (PLATFORM-17), the fonts' OFL.txt beside them; update-grub's 00_header loads it from here
+    mkdir -p "$s/boot/grub/themes/autobleem"
+    cp -r "$REPO_DIR/payload_linux/system/grub-theme/." "$s/boot/grub/themes/autobleem/"
 
     install -m 0644 "$REPO_DIR/payload_linux/system/plymouth/autobleem.plymouth" \
                     "$REPO_DIR/payload_linux/system/plymouth/autobleem.script" \
@@ -271,7 +276,9 @@ EOF
     # root always has somewhere for it to land.
     install -m 0755 "$REPO_DIR/payload_linux/system/autobleem-firstboot.sh" "$s/opt/autobleem-image/autobleem-firstboot.sh"
     install -m 0644 "$REPO_DIR/payload_linux/system/autobleem-install-ui.py" "$s/opt/autobleem-image/autobleem-install-ui.py"
-    install -m 0644 "$REPO_DIR/payload_linux/system/plymouth/splash.png" "$s/opt/autobleem-image/splash.png"
+    mkdir -p "$s/opt/autobleem-image/install-ui"
+    cp -r "$REPO_DIR/payload_linux/system/install-ui/." "$s/opt/autobleem-image/install-ui/"
+    chmod -R u=rwX,go=rX "$s/opt/autobleem-image/install-ui"
     install -m 0644 "$REPO_DIR/payload_linux/system/autobleem-firstboot.service" "$s/etc/systemd/system/autobleem-firstboot.service"
     ln -sf ../autobleem-firstboot.service "$s/etc/systemd/system/multi-user.target.wants/autobleem-firstboot.service"
     # ssh from the first boot (the owner's rule: once installed the launcher owns tty1 and the keyboard, so
@@ -393,12 +400,15 @@ plymouth-set-default-theme autobleem
 update-initramfs -u -k all
 # the menu GRUB boots from until the first boot runs update-grub (grub-mkconfig cannot probe a device here)
 mkdir -p /boot/grub
-{ printf "set timeout=2\nset timeout_style=hidden\nset gfxmode=auto\nset gfxpayload=keep\nif loadfont unicode; then insmod gfxterm; insmod all_video; terminal_output gfxterm; fi\n"
+{ printf "set timeout=3\nset timeout_style=menu\nset gfxmode=1920x1080x32,1024x768x32,auto\nset gfxpayload=keep\nif loadfont unicode; then insmod gfxterm; insmod all_video; terminal_output gfxterm; fi\n"
+  printf "insmod png\ninsmod gfxmenu\n"
+  for f in /boot/grub/themes/autobleem/*.pf2; do printf "loadfont /boot/grub/themes/autobleem/%s\n" "${f##*/}"; done
+  printf "set theme=/boot/grub/themes/autobleem/theme.txt\nexport theme\n"
   GRUB_CMDLINE_LINUX_DEFAULT="$(sed -n "s/^GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"$/\1/p" /etc/default/grub)" \
   GRUB_CMDLINE_LINUX="" sh /etc/grub.d/10_autobleem; } > /boot/grub/grub.cfg
 # GRUB modules for the images grub-mkimage makes (they embed what they need; these are for a rescue shell)
 for p in i386-pc i386-efi x86_64-efi; do [ -d /usr/lib/grub/$p ] && mkdir -p /boot/grub/$p && cp /usr/lib/grub/$p/*.mod /usr/lib/grub/$p/*.lst /boot/grub/$p/ 2>/dev/null || true; done
-cp /usr/share/grub/unicode.pf2 /boot/grub/ 2>/dev/null || true
+mkdir -p /boot/grub/fonts; cp /usr/share/grub/unicode.pf2 /boot/grub/ 2>/dev/null || true; cp /usr/share/grub/unicode.pf2 /boot/grub/fonts/ 2>/dev/null || true
 rm -f /etc/ssh/ssh_host_*
 : > /etc/machine-id
 rm -f /var/lib/dbus/machine-id

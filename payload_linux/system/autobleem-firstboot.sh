@@ -105,7 +105,7 @@ BACKTITLE="AutoBleem - first boot setup"
 ui() {
     local backend=fb
     [ "$UI_MODE" = text ] && backend=text
-    python3 "$UI" --backend "$backend" --logo "$IMAGE_DIR/splash.png" --tty /dev/tty8 --backtitle "$BACKTITLE" "$@"
+    python3 "$UI" --backend "$backend" --assets "$IMAGE_DIR/install-ui" --tty /dev/tty8 --backtitle "$BACKTITLE" "$@"
 }
 ui_available() { [ -f "$UI" ] && command -v python3 >/dev/null 2>&1; }
 

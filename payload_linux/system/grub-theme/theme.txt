@@ -1,0 +1,65 @@
+# AutoBleem 2 - the PC stick's GRUB menu (PLATFORM-17, design A; autobleem-design themes/ab2.0.0/design/platform17)
+# One theme for every mode: positions in % of the screen, sizes in px (the .pf2 fonts do not scale).
+title-text: ""
+desktop-image: "background.png"
+desktop-color: "#080a0e"
+terminal-font: "Red Hat Mono Medium 20"
+terminal-box: "terminal_box_*.png"
+terminal-left: "10%"
+terminal-top: "10%"
+terminal-width: "80%"
+terminal-height: "80%"
+terminal-border: "0"
+
+# the C3 logo at its own size, centred (the background has none, so a 4:3 mode does not squeeze it)
++ image {
+  file = "logo.png"
+  left = 50%-280
+  top = 13%
+  width = 560
+  height = 126
+}
+
++ boot_menu {
+  left = 50%-410
+  top = 42%
+  width = 820
+  height = 300
+  menu_pixmap_style = "menu_*.png"
+  selected_item_pixmap_style = "select_*.png"
+  item_font = "Red Hat Mono Medium 28"
+  selected_item_font = "Red Hat Mono Medium 28"
+  item_color = "#9aa4b2"
+  selected_item_color = "#f4f6f8"
+  item_height = 46
+  item_padding = 16
+  item_spacing = 12
+  item_icon_space = 0
+  icon_width = 0
+  icon_height = 0
+  scrollbar = false
+}
+
+# the countdown under the box (GRUB fills %d; the label is hidden once a key is pressed)
++ label {
+  id = "__timeout__"
+  text = "Booting the highlighted entry in %d s"
+  font = "Red Hat Mono Medium 20"
+  color = "#36d9e0"
+  left = 0
+  top = 42%+320
+  width = 100%
+  height = 30
+  align = "center"
+}
+
++ label {
+  text = "↑↓ choose   Enter boot   e edit   c console"
+  font = "Red Hat Mono Medium 18"
+  color = "#9aa4b2"
+  left = 0
+  top = 94%-12
+  width = 100%
+  height = 24
+  align = "center"
+}

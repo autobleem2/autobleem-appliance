@@ -1586,7 +1586,9 @@ install_update_helper() {
     run install -d -m 0755 "$share" "$share/installer/system"
     run install -m 0755 "$SCRIPT_DIR/system/autobleem-update.sh" /usr/local/bin/autobleem-update
     run install -m 0644 "$SCRIPT_DIR/system/autobleem-install-ui.py" "$share/autobleem-install-ui.py"
-    run install -m 0644 "$SCRIPT_DIR/system/plymouth/splash.png" "$share/splash.png"
+    run rm -rf "$share/install-ui" "$share/splash.png"      # the screen's logos and fonts (splash.png: the old logo)
+    run cp -r "$SCRIPT_DIR/system/install-ui" "$share/install-ui"
+    run chmod -R u=rwX,go=rX "$share/install-ui"
     run install -m 0755 "$SCRIPT_DIR/install.sh" "$share/installer/install.sh"
     run cp -r "$SCRIPT_DIR/system/." "$share/installer/system/"
 }
@@ -1685,7 +1687,7 @@ configure_boot_pcusb() {
     run cp -n "$grub_default" "$grub_default.autobleem-backup"
 
     # GRUB_CMDLINE_LINUX_DEFAULT gets our words (any earlier value's other words kept, ours replacing their
-    # namesakes); the menu is hidden with a 2 s Shift window, the framebuffer mode GRUB set is kept for the
+    # namesakes); the menu shows for 3 s in the AutoBleem theme, the framebuffer mode GRUB set is kept for the
     # kernel so the handover to plymouth is not a modeset. Every key is written whole - a missing one is added.
     local current cmdline word kept
     current="$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"$/\1/p' "$grub_default" | tail -1)"
@@ -1699,13 +1701,27 @@ configure_boot_pcusb() {
     cmdline="$kept${kept:+ }$(boot_cmdline_words)"
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '    would set GRUB_CMDLINE_LINUX_DEFAULT="%s", GRUB_TIMEOUT=2, GRUB_TIMEOUT_STYLE=hidden and run update-grub\n' "$cmdline"
+        printf '    would set GRUB_CMDLINE_LINUX_DEFAULT="%s", GRUB_TIMEOUT=3, GRUB_TIMEOUT_STYLE=menu, the AutoBleem theme and run update-grub\n' "$cmdline"
         return 0
     fi
+    # the menu theme (PLATFORM-17): the folder GRUB_THEME names, in /boot/grub where grub.cfg is
+    local theme_src="$SCRIPT_DIR/system/grub-theme" theme_dir=/boot/grub/themes/autobleem
+    if [ -f "$theme_src/theme.txt" ]; then
+        run install -d -m 0755 "$theme_dir"
+        run cp -rf "$theme_src/." "$theme_dir/"
+    else
+        warn "no system/grub-theme in the package - GRUB keeps its plain menu"
+    fi
+    # gfxterm needs GRUB's unicode font where `loadfont unicode` looks (/boot/grub/fonts), which update-grub's header relies on too
+    if [ -f /usr/share/grub/unicode.pf2 ] && [ ! -f /boot/grub/fonts/unicode.pf2 ]; then
+        run install -d -m 0755 /boot/grub/fonts
+        run cp /usr/share/grub/unicode.pf2 /boot/grub/fonts/unicode.pf2
+    fi
     {
-        grep -vE '^(GRUB_CMDLINE_LINUX_DEFAULT|GRUB_TIMEOUT|GRUB_TIMEOUT_STYLE|GRUB_GFXMODE|GRUB_GFXPAYLOAD_LINUX)=' "$grub_default"
+        grep -vE '^(GRUB_CMDLINE_LINUX_DEFAULT|GRUB_TIMEOUT|GRUB_TIMEOUT_STYLE|GRUB_TERMINAL_OUTPUT|GRUB_GFXMODE|GRUB_GFXPAYLOAD_LINUX|GRUB_THEME)=' "$grub_default"
         printf 'GRUB_CMDLINE_LINUX_DEFAULT="%s"\n' "$cmdline"
-        printf 'GRUB_TIMEOUT=2\nGRUB_TIMEOUT_STYLE=hidden\nGRUB_GFXMODE=auto\nGRUB_GFXPAYLOAD_LINUX=keep\n'
+        printf 'GRUB_TIMEOUT=3\nGRUB_TIMEOUT_STYLE=menu\nGRUB_TERMINAL_OUTPUT=gfxterm\nGRUB_GFXMODE=1920x1080x32,1024x768x32,auto\nGRUB_GFXPAYLOAD_LINUX=keep\n'
+        [ -f "$theme_dir/theme.txt" ] && printf 'GRUB_THEME=%s/theme.txt\n' "$theme_dir"
     } | write_file "$grub_default"
     run update-grub || warn "update-grub failed - the boot options were written to $grub_default but not applied"
     [ "$HDMI_MODE" = "1920x1080@60" ] || [ "$HDMI_MODE" = none ] \
