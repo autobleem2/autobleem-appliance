@@ -251,16 +251,21 @@ EOF
     cat >"$s/etc/default/grub" <<'EOF'
 # AutoBleem PC stick - install.sh (configure_boot_pcusb) rewrites the keys below on every run
 GRUB_DEFAULT=0
-GRUB_TIMEOUT=2
-GRUB_TIMEOUT_STYLE=hidden
+GRUB_TIMEOUT=3
+GRUB_TIMEOUT_STYLE=menu
+GRUB_TERMINAL_OUTPUT=gfxterm
 GRUB_DISTRIBUTOR=AutoBleem
 GRUB_CMDLINE_LINUX_DEFAULT="consoleblank=0 quiet loglevel=3 logo.nologo vt.global_cursor_default=0 splash plymouth.ignore-serial-consoles"
 GRUB_CMDLINE_LINUX=""
-GRUB_GFXMODE=auto
+GRUB_GFXMODE=1920x1080,1024x768,auto
 GRUB_GFXPAYLOAD_LINUX=keep
+GRUB_THEME=/boot/grub/themes/autobleem/theme.txt
 GRUB_DISABLE_OS_PROBER=true
 EOF
     install -m 0755 "$SCRIPT_DIR/pc_image/10_autobleem" "$s/etc/grub.d/10_autobleem"
+    # the menu theme (PLATFORM-17), the fonts' OFL.txt beside them; update-grub's 00_header loads it from here
+    mkdir -p "$s/boot/grub/themes/autobleem"
+    cp -r "$REPO_DIR/payload_linux/system/grub-theme/." "$s/boot/grub/themes/autobleem/"
 
     install -m 0644 "$REPO_DIR/payload_linux/system/plymouth/autobleem.plymouth" \
                     "$REPO_DIR/payload_linux/system/plymouth/autobleem.script" \
@@ -395,7 +400,10 @@ plymouth-set-default-theme autobleem
 update-initramfs -u -k all
 # the menu GRUB boots from until the first boot runs update-grub (grub-mkconfig cannot probe a device here)
 mkdir -p /boot/grub
-{ printf "set timeout=2\nset timeout_style=hidden\nset gfxmode=auto\nset gfxpayload=keep\nif loadfont unicode; then insmod gfxterm; insmod all_video; terminal_output gfxterm; fi\n"
+{ printf "set timeout=3\nset timeout_style=menu\nset gfxmode=1920x1080,1024x768,auto\nset gfxpayload=keep\nif loadfont unicode; then insmod gfxterm; insmod all_video; terminal_output gfxterm; fi\n"
+  printf "insmod png\n"
+  for f in /boot/grub/themes/autobleem/*.pf2; do printf "loadfont /boot/grub/themes/autobleem/%s\n" "${f##*/}"; done
+  printf "set theme=/boot/grub/themes/autobleem/theme.txt\nexport theme\n"
   GRUB_CMDLINE_LINUX_DEFAULT="$(sed -n "s/^GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"$/\1/p" /etc/default/grub)" \
   GRUB_CMDLINE_LINUX="" sh /etc/grub.d/10_autobleem; } > /boot/grub/grub.cfg
 # GRUB modules for the images grub-mkimage makes (they embed what they need; these are for a rescue shell)
