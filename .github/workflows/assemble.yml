@@ -472,6 +472,13 @@ jobs:
         with:
           repository: autobleem2/autobleem-repo
           path: autobleem-repo-tools
+      # This runner's work folder persists between runs and download-artifact never empties its target, so
+      # every run's payloads and images piled up in out/ and img/ (10 GB of old .img.xz by 2026-10-01). Start
+      # from nothing: only this run's files are here when the publish below looks at them. build_image/ is a
+      # leftover of the days the image job ran on this host (it runs on bleemmachine now) - nothing reads it.
+      # The image bases are cached on the image host (AB_IMAGE_CACHE_DIR), never in these folders.
+      - name: Clear the previous runs' files
+        run: rm -rf out img build_image
       - uses: actions/download-artifact@v8
         with:
           pattern: payload-*
@@ -564,7 +571,10 @@ jobs:
                 ;;
             esac
           done
-
+      # The site holds its own copy now (set -e above: a failed publish never gets here, and the next run's
+      # first step clears the leftovers anyway).
+      - name: Delete the published files
+        run: rm -rf out img
   publish-nightly:
     # a development build's last publish: every piece (the images, the packages) went up with --partial and
     # the site's index left the folder out, so the previous nightly stayed whole meanwhile. This publishes the
@@ -588,6 +598,7 @@ jobs:
       - name: Publish nightly/${{ needs.plan.outputs.version }} as the development build
         run: |
           set -euo pipefail
+          rm -rf out
           mkdir -p out
           printf '{"sources": "%s", "images": %s, "platforms": "%s", "run": "%s/%s/actions/runs/%s"}\n' \
             "${{ needs.plan.outputs.sources }}" "${{ needs.plan.outputs.images }}" "${{ needs.plan.outputs.platform_list }}" \
@@ -597,3 +608,4 @@ jobs:
             ghcr.io/autobleem2/autobleem-build:develop \
             bash autobleem-repo-tools/tools/repo_publish.sh --local nightly \
               "${{ needs.plan.outputs.version }}" out/sources.json
+          rm -rf out
