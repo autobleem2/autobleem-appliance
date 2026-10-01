@@ -132,7 +132,7 @@ above remains the fully proven path - see the "Status" table for how far this on
 Imager as `rpi-imager --repo <that URL>`); AutoBleem then appears in the *Operating System* list
 for both 32-bit and 64-bit, with Imager's own customisation screen (user, WiFi, SSH) on top. Or download
 an `.img.xz` from <https://autobleem.retromenele.pl/> and flash it with *Use custom*. The site's
-[Raspberry Pi page](https://autobleem.retromenele.pl/rpi-install.html) says which image fits which Pi.
+[Raspberry Pi page](https://autobleem.retromenele.pl/repository/rpi-install.html) says which image fits which Pi.
 What follows is how those images are built.
 
 `tools/make_rpi_image.sh` takes an official Raspberry Pi OS Lite image (downloaded automatically, or your
