@@ -414,9 +414,10 @@ class Canvas:
 class Screen:
     """The progress state (phase, percentage, output lines) and, with a canvas, its framebuffer drawing.
     The text backend keeps its state in one of these too, with no canvas, and draws it itself."""
-    def __init__(self, canvas, logo, big, small, logo_cache=""):
+    def __init__(self, canvas, logo, big, small, logo_cache="", keys=None):
         self.c = canvas
         self.big, self.small = big, small
+        self.keys = keys or small           # the dialogs' hotkey letters: the semibold of the small cell
         self.phase, self.phase_index, self.phase_count = "Preparing", 0, 1
         self.percent = None
         self.percent_label = ""             # the file the percentage belongs to, when the output names it
@@ -514,7 +515,7 @@ class Screen:
         sw = self.small.width if self.small else 8
         max_chars = (bw - 2 * (2 + 16)) // sw
         # heading: the phase
-        c.text(x0, y, self.heading(), self.big, CYAN, BG)
+        c.text(x0, y, self.heading(), self.big, INK, BG)       # white, as in the mockup (the dialogs' titles stay cyan)
         y += (self.big.height if self.big else 32) + h // 45
         # bar 1: the phases - the label at the left, "step n of m" at the right
         c.text(x0, y, (self.phase if not self.done else "Finished")[:max_chars - 16], self.small, INK, BG)
@@ -660,7 +661,7 @@ class Dialog:
                     c.cut_frame(x0 + pad - 10, ty - 3, bw - 2 * pad + 20, lh + 6, MAGENTA, SELROW, s.cut_k, 2)
                 tx = x0 + pad + 4
                 if key:
-                    tx += c.text(tx, ty, key, small, MAGENTA if chosen else CYAN, bg) + 2 * sw
+                    tx += c.text(tx, ty, key, s.keys, MAGENTA if chosen else CYAN, bg) + 2 * sw
                 else:
                     tx += 3 * sw
                 c.text(tx, ty, label[:max_chars - (tx - x0 - pad) // sw], small, INK, bg)
@@ -1205,10 +1206,11 @@ def main():
         scale = height / 1080.0
         big = find_font(32 if scale >= 0.9 else 24, bold=True)
         small = find_font(20 if scale >= 0.9 else 16) or find_font(16)
+        keys = find_font(20 if scale >= 0.9 else 16, bold=True) or small
         logo = os.path.join(args.assets, "logo-install-%s.png" % ("1080" if scale >= 0.9 else "720"))
         if not os.path.isfile(logo):
             logo = ""
-        screen = Screen(canvas, logo, big, small, logo + ".cache" if logo and fb is not None else "")
+        screen = Screen(canvas, logo, big, small, logo + ".cache" if logo and fb is not None else "", keys)
         backend = FbBackend(canvas, fb, fb_var)
 
         if args.tty and fb is not None and fcntl is not None:
