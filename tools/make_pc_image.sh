@@ -257,7 +257,7 @@ GRUB_TERMINAL_OUTPUT=gfxterm
 GRUB_DISTRIBUTOR=AutoBleem
 GRUB_CMDLINE_LINUX_DEFAULT="consoleblank=0 quiet loglevel=3 logo.nologo vt.global_cursor_default=0 splash plymouth.ignore-serial-consoles"
 GRUB_CMDLINE_LINUX=""
-GRUB_GFXMODE=1920x1080,1024x768,auto
+GRUB_GFXMODE=1920x1080x32,1024x768x32,auto
 GRUB_GFXPAYLOAD_LINUX=keep
 GRUB_THEME=/boot/grub/themes/autobleem/theme.txt
 GRUB_DISABLE_OS_PROBER=true
@@ -400,15 +400,15 @@ plymouth-set-default-theme autobleem
 update-initramfs -u -k all
 # the menu GRUB boots from until the first boot runs update-grub (grub-mkconfig cannot probe a device here)
 mkdir -p /boot/grub
-{ printf "set timeout=3\nset timeout_style=menu\nset gfxmode=1920x1080,1024x768,auto\nset gfxpayload=keep\nif loadfont unicode; then insmod gfxterm; insmod all_video; terminal_output gfxterm; fi\n"
-  printf "insmod png\n"
+{ printf "set timeout=3\nset timeout_style=menu\nset gfxmode=1920x1080x32,1024x768x32,auto\nset gfxpayload=keep\nif loadfont unicode; then insmod gfxterm; insmod all_video; terminal_output gfxterm; fi\n"
+  printf "insmod png\ninsmod gfxmenu\n"
   for f in /boot/grub/themes/autobleem/*.pf2; do printf "loadfont /boot/grub/themes/autobleem/%s\n" "${f##*/}"; done
   printf "set theme=/boot/grub/themes/autobleem/theme.txt\nexport theme\n"
   GRUB_CMDLINE_LINUX_DEFAULT="$(sed -n "s/^GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"$/\1/p" /etc/default/grub)" \
   GRUB_CMDLINE_LINUX="" sh /etc/grub.d/10_autobleem; } > /boot/grub/grub.cfg
 # GRUB modules for the images grub-mkimage makes (they embed what they need; these are for a rescue shell)
 for p in i386-pc i386-efi x86_64-efi; do [ -d /usr/lib/grub/$p ] && mkdir -p /boot/grub/$p && cp /usr/lib/grub/$p/*.mod /usr/lib/grub/$p/*.lst /boot/grub/$p/ 2>/dev/null || true; done
-cp /usr/share/grub/unicode.pf2 /boot/grub/ 2>/dev/null || true
+mkdir -p /boot/grub/fonts; cp /usr/share/grub/unicode.pf2 /boot/grub/ 2>/dev/null || true; cp /usr/share/grub/unicode.pf2 /boot/grub/fonts/ 2>/dev/null || true
 rm -f /etc/ssh/ssh_host_*
 : > /etc/machine-id
 rm -f /var/lib/dbus/machine-id

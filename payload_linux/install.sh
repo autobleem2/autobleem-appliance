@@ -1712,10 +1712,15 @@ configure_boot_pcusb() {
     else
         warn "no system/grub-theme in the package - GRUB keeps its plain menu"
     fi
+    # gfxterm needs GRUB's unicode font where `loadfont unicode` looks (/boot/grub/fonts), which update-grub's header relies on too
+    if [ -f /usr/share/grub/unicode.pf2 ] && [ ! -f /boot/grub/fonts/unicode.pf2 ]; then
+        run install -d -m 0755 /boot/grub/fonts
+        run cp /usr/share/grub/unicode.pf2 /boot/grub/fonts/unicode.pf2
+    fi
     {
         grep -vE '^(GRUB_CMDLINE_LINUX_DEFAULT|GRUB_TIMEOUT|GRUB_TIMEOUT_STYLE|GRUB_TERMINAL_OUTPUT|GRUB_GFXMODE|GRUB_GFXPAYLOAD_LINUX|GRUB_THEME)=' "$grub_default"
         printf 'GRUB_CMDLINE_LINUX_DEFAULT="%s"\n' "$cmdline"
-        printf 'GRUB_TIMEOUT=3\nGRUB_TIMEOUT_STYLE=menu\nGRUB_TERMINAL_OUTPUT=gfxterm\nGRUB_GFXMODE=1920x1080,1024x768,auto\nGRUB_GFXPAYLOAD_LINUX=keep\n'
+        printf 'GRUB_TIMEOUT=3\nGRUB_TIMEOUT_STYLE=menu\nGRUB_TERMINAL_OUTPUT=gfxterm\nGRUB_GFXMODE=1920x1080x32,1024x768x32,auto\nGRUB_GFXPAYLOAD_LINUX=keep\n'
         [ -f "$theme_dir/theme.txt" ] && printf 'GRUB_THEME=%s/theme.txt\n' "$theme_dir"
     } | write_file "$grub_default"
     run update-grub || warn "update-grub failed - the boot options were written to $grub_default but not applied"

@@ -52,3 +52,15 @@ if [ "$have_pae$have_amd64$have_686" = 000 ]; then
     echo "10_autobleem: no kernel under /boot" >&2
     exit 1
 fi
+
+# the firmware's own setup screen - a UEFI machine only (BIOS GRUB has no fwsetup); the same test Debian's
+# 30_uefi-firmware makes, which the image keeps switched off in favour of this entry
+cat <<'EOS'
+if [ "${grub_platform}" = "efi" ]; then
+	if fwsetup --is-supported; then
+		menuentry 'UEFI Firmware Settings' --class autobleem --id uefi-firmware {
+			fwsetup
+		}
+	fi
+fi
+EOS
