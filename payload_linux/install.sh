@@ -1344,6 +1344,34 @@ create_tree() {
 }
 
 #*******************************
+# the default theme on an update (UIREV-51)
+#*******************************
+# An update keeps config.ini, so a stick on an older theme would stay on it although the package has a new
+# default. The package's default theme is the one its own config.ini names (Theme=) - one source, the launcher's
+# shipped config.ini - when the package carries that folder under Themes/. When an install brings that folder to a
+# data partition that did not have it, the theme setting is switched to it once; a partition that had the
+# folder keeps the user's choice.
+package_default_theme() {
+    local cfg="$STAGE_DIR/Autobleem/bin/autobleem/config.ini" name
+    [ -f "$cfg" ] || return 0
+    name="$(sed -n 's/^[Tt][Hh][Ee][Mm][Ee]=//p' "$cfg" | head -1 | tr -d '\r')"
+    if [ -n "$name" ] && [ -d "$STAGE_DIR/Themes/$name" ]; then
+        echo "$name"
+    fi
+    return 0
+}
+
+# set_config_theme <config.ini> <theme>: the key replaced in place, or added when the file has none
+set_config_theme() {
+    local cfg="$1" name="$2"
+    if grep -qi '^theme=' "$cfg"; then
+        run sed -i "s/^[Tt][Hh][Ee][Mm][Ee]=.*/Theme=$name/" "$cfg"
+    else
+        run sh -c 'printf "\nTheme=%s\n" "$1" >> "$2"' sh "$name" "$cfg"
+    fi
+}
+
+#*******************************
 # install_payload
 #*******************************
 # payload_linux/ is the tree that goes on the data partition, laid out exactly like the console's payload/:
@@ -1357,6 +1385,13 @@ install_payload() {
 $STAGE_DIR/Autobleem/bin/autobleem
     Build it on the PC with ./make_rpi.sh and package it with tools/make_rpi_package.sh, then run this
     installer from the unpacked package (--stage points at the tree if you keep it somewhere else)."
+
+    # whether this install brings the package's default theme to a partition that did not have it (see above)
+    local default_theme had_default_theme=0
+    default_theme="$(package_default_theme)"
+    if [ -n "$default_theme" ] && [ -d "$DATA_MOUNT/Themes/$default_theme" ]; then
+        had_default_theme=1
+    fi
 
     # a re-install should not throw away the theme, language and aspect the user picked in the Options menu
     if [ -f "$app_dest/config.ini" ]; then
@@ -1414,6 +1449,10 @@ $STAGE_DIR/Autobleem/bin/autobleem
 
     if [ -f "$app_dest/config.ini.keep" ]; then
         run mv -f "$app_dest/config.ini.keep" "$app_dest/config.ini"
+    fi
+    if [ -n "$default_theme" ] && [ "$had_default_theme" -eq 0 ] && [ -f "$app_dest/config.ini" ]; then
+        log "Theme set to $default_theme (new on this installation)"
+        set_config_theme "$app_dest/config.ini" "$default_theme"
     fi
     # the PS1 emulator every install lands on (the owner's rule, 2026-09-21): pcsx-abnxt, whatever the kept
     # config.ini said - the key replaced in place, or added when the file has none
