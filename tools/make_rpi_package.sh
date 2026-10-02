@@ -20,8 +20,8 @@
 #                                      # pi@raspberrypi.local), the way make_psc.sh talks to its build server
 #
 # The package is payload_linux/ as checked in (install.sh, README.md, system/ for the host-side files, and the
-# data-partition tree: Autobleem/ - with pcsx-ab and its plugins already in bin/emu (armhf), bin/emu-arm64
-# (arm64) or bin/emu-i386 (the PC stick), put there by pcsx-rearmed-develop's builds - Games/, Apps/) with
+# data-partition tree: Autobleem/ - Games/, Apps/; the emulator trees checked in under bin/emu* are NOT
+# shipped, see AB_EMU_CHANNEL below) with
 # the built parts filled in: the binary and its resources in Autobleem/bin/autobleem, the cover databases in
 # Autobleem/bin/db, and Themes/ from autobleem2/autobleem-themes' own release (D5, 2026-09-26 - the same
 # tools/release_assets.sh:stage_themes() assemble.sh uses, so a local package gets the same themes a real
@@ -38,6 +38,12 @@
 #     AB_LAUNCHER_DIR="$PWD" /path/to/autobleem-appliance/tools/make_rpi_package.sh
 #
 # AB_LAUNCHER_DIR overrides the default (the working directory this is invoked from); AB_THEMES_DIR as above.
+#
+# AB_EMU_CHANNEL=release|testing|nightly|preview picks the channel whose pcsx-ab / pcsx-abnxt the package carries
+# (tools/release_assets.sh, stage_emulator: the emulator's own release of that channel, as assemble.sh fetches
+# it; a preview with no emulator preview takes the nightly, loudly). Not set: the emulators ci/build.sh staged
+# into $BUILD_DIR/emu-stage/ from a local checkout, else the nightly. Never the checked-in trees; a channel with
+# no emulator fails the build. Needs `gh`, or curl + python3 (public API, GH_TOKEN lifts the rate limit).
 #
 # Copy the tarball to the Pi, unpack it, and run install.sh from inside it. See payload_linux/README.md.
 set -euo pipefail
@@ -97,32 +103,34 @@ mkdir -p "$STAGE"
 # the checked-in payload: installer, README, system/ and the data-partition tree
 cp -a "$PAYLOAD/." "$STAGE/"
 
-# the arch-specific pcsx-ab tree lives at Autobleem/bin/emu (armhf), emu-arm64 or emu-i386 in the checked-in
-# payload - and the same for emunxt (pcsx-abnxt, the next emulator): emunxt, emunxt-arm64, emunxt-i386. The
-# staged tree always uses emu/ and emunxt/ on the device, so another architecture's package replaces each
-# with its own tree's contents (an emu-* that is not checked in yet - the PC stick until pcsx-ab has been
-# built for it - leaves no emu/ at all: install.sh's RetroArch core fallback plays PS1 then).
-EMU_ARCH_SUFFIX="${EMU_SRC_SUBDIR#emu}"   # "" for armhf, "-arm64", "-i386"
+# The emulators: pcsx-ab -> Autobleem/bin/emu, pcsx-abnxt -> Autobleem/bin/emunxt. The emulator trees checked in
+# under payload_linux/Autobleem/bin/emu* are NEVER shipped (an old one rolled a device's emulator back on every
+# install.sh --update, 2026-10-01): they are dropped here and each emulator comes from one of
+#   - $BUILD_DIR/emu-stage/<emu><suffix>, which ci/build.sh stages from a pcsx checkout it has just built (D21 -
+#     a build must never leave the checkout dirty); used when AB_EMU_CHANNEL is not set, or
+#   - the package's channel, AB_EMU_CHANNEL = release | testing | nightly | preview: the emulator's own release of
+#     that channel, the artifact assemble.sh would fetch (tools/release_assets.sh, stage_emulator; pcsx-ab is
+#     frozen at one release for every channel). Not set and no emu-stage: nightly - said in the log.
+# A channel with no emulator (no release, no asset for this architecture) fails the build.
+case "$ARCH" in armhf) EMU_KEY=rpi-armhf ;; arm64) EMU_KEY=rpi-arm64 ;; i386) EMU_KEY=pcusb ;; esac
+EMU_ARCH_SUFFIX="${EMU_SRC_SUBDIR#emu}"   # "" for armhf, "-arm64", "-i386": the emu-stage folder's name
+rm -rf "$STAGE"/Autobleem/bin/emu "$STAGE"/Autobleem/bin/emu-* "$STAGE"/Autobleem/bin/emunxt "$STAGE"/Autobleem/bin/emunxt-*
+mkdir -p "$STAGE/Autobleem/bin"
 for emu in emu emunxt; do
-    # pcsx-ab / pcsx-abnxt: ci/build.sh stages a freshly built emulator into $BUILD_DIR/emu-stage/ rather
-    # than the tracked payload_linux/Autobleem/bin/emu* tree (D21 - a build must never leave the checkout
-    # dirty). Use it when it is there, overwriting the checked-in copy the cp -a above just staged; the
-    # rename below then treats it exactly as it would the checked-in one.
+    case "$emu" in emu) emu_repo=pcsx-ab ;; emunxt) emu_repo=pcsx-abnxt ;; esac
     staged="$BUILD_DIR/emu-stage/$emu$EMU_ARCH_SUFFIX"
-    if [ -d "$staged" ]; then
-        rm -rf "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX"
-        mkdir -p "$STAGE/Autobleem/bin"
-        cp -a "$staged" "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX"
-    fi
-    if [ -n "$EMU_ARCH_SUFFIX" ]; then
-        rm -rf "$STAGE/Autobleem/bin/$emu"
-        if [ -d "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX" ]; then
-            mv "$STAGE/Autobleem/bin/$emu$EMU_ARCH_SUFFIX" "$STAGE/Autobleem/bin/$emu"
-        elif [ "$emu" = emu ]; then
-            echo "    (no $PAYLOAD/Autobleem/bin/$emu$EMU_ARCH_SUFFIX - the package ships no pcsx-ab)"
+    if [ -z "${AB_EMU_CHANNEL:-}" ] && [ -d "$staged" ]; then
+        cp -a "$staged" "$STAGE/Autobleem/bin/$emu"
+        echo "    emulator $emu_repo <- $staged (built from the local checkout by ci/build.sh), pcsx-ab md5 $(md5sum "$staged/pcsx-ab" 2>/dev/null | cut -d' ' -f1)"
+    else
+        if [ -z "${AB_EMU_CHANNEL:-}" ]; then
+            echo "    AB_EMU_CHANNEL is not set and ci/build.sh staged no $emu_repo: taking the NIGHTLY one" >&2
         fi
+        stage_emulator "$emu_repo" "$EMU_KEY" "$STAGE/Autobleem/bin/$emu" "${AB_EMU_CHANNEL:-nightly}" || {
+            echo "no $emu_repo for the ${AB_EMU_CHANNEL:-nightly} channel - not shipping the checked-in one (AB_EMU_CHANNEL=release|testing|nightly|preview)" >&2
+            exit 1
+        }
     fi
-    rm -rf "$STAGE/Autobleem/bin/$emu-arm64" "$STAGE/Autobleem/bin/$emu-i386"
 done
 
 # the app: the freshly cross-compiled binary plus the resources tree it reads at runtime. The resources come

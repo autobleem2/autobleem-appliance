@@ -15,8 +15,8 @@ This repository assembles the complete AutoBleem distribution for each target pl
 ## Local packaging (`tools/make_rpi_package.sh`)
 
 A second, local-only route to a Pi/PC-stick tarball, for a developer with a fresh cross-build and no
-tagged unified release to point `assemble.sh` at - it never touches GitHub releases except for the themes
-(below). DOCS-5 (2026-09-27, `payload_linux/` moved here from the launcher): this repo owns
+tagged unified release to point `assemble.sh` at - it reads GitHub releases for the themes (below) and for the
+emulators (next). DOCS-5 (2026-09-27, `payload_linux/` moved here from the launcher): this repo owns
 `payload_linux/`, `tools/release_assets.sh` and this script; the launcher's own checkout (a separate
 clone, `autobleem2/autobleem`) owns the cross-compiled binary, `src/resources/`, `LICENSE`/
 `THIRD_PARTY_NOTICES.md` and the build's `version.h`. Run it from inside the launcher checkout, or set
@@ -29,6 +29,14 @@ Themes come from `autobleem2/autobleem-themes`' own release via `tools/release_a
 `stage_themes()` (the same call `assemble.sh` makes) - needs `gh` authenticated. `AB_THEMES_DIR=<a local
 autobleem-themes checkout>` is a fallback that copies `Themes/` straight from disk, for a machine with no
 `gh` (or offline).
+
+**Emulators**: the trees checked in under `payload_linux/Autobleem/bin/emu*` are never packaged (an old one
+rolled devices back, 2026-10-01). `AB_EMU_CHANNEL=release|testing|nightly|preview` makes the script fetch pcsx-abnxt
+(and pcsx-ab, frozen at its one release) of that channel from their GitHub releases (`stage_emulator` in
+`tools/release_assets.sh`; `gh` or curl + python3): release = latest full release, testing = newest `v*`
+pre-release, nightly = `nightly`, preview = `preview` (none: the nightly, with a loud line in the log). Not set: the
+emulator `ci/build.sh` staged into `build_*/emu-stage/` from a local checkout, else the nightly. No emulator for the
+channel = the build fails. `assemble.sh` (the CI route) already took them from the release of its channel.
 
 ## Build order and CI
 

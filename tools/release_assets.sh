@@ -172,3 +172,91 @@ stage_themes() {
     rm -rf "$tmp"
     echo "    bundled the themes ($repo@$tag)"
 }
+
+# _gh_json PATH - the GitHub REST answer for PATH (repos/<r>/releases/...) on stdout: through `gh` when it is
+# there, else plain curl on the public API (GH_TOKEN, when set, only lifts the rate limit). The local packaging
+# runs on machines that have no gh (the build laptop).
+_gh_json() {
+    if command -v gh >/dev/null 2>&1; then
+        gh api "$1"
+    else
+        curl -fsS -H 'Accept: application/vnd.github+json' ${GH_TOKEN:+-H "Authorization: Bearer $GH_TOKEN"} \
+            "https://api.github.com/$1"
+    fi
+}
+
+# _gh_asset URL DEST - download one release asset (its API url) to DEST, gh or curl as above
+_gh_asset() {
+    if command -v gh >/dev/null 2>&1; then
+        gh api -H 'Accept: application/octet-stream' "${1#https://api.github.com/}" > "$2"
+    else
+        curl -fsSL -H 'Accept: application/octet-stream' ${GH_TOKEN:+-H "Authorization: Bearer $GH_TOKEN"} "$1" -o "$2"
+    fi
+}
+
+# _gh_pick PATH MODE [GLOB] - fetch PATH (_gh_json) and print what tools/release_pick.py MODE reads from it;
+# fails when the fetch does (a missing release is a 404)
+_gh_pick() {
+    local path="$1" mode="$2" glob="${3:-}" json rc=0
+    json="$(mktemp)"
+    if _gh_json "$path" > "$json" 2>/dev/null; then
+        python3 "$(dirname "${BASH_SOURCE[0]}")/release_pick.py" "$mode" ${glob:+"$glob"} "$json" || rc=$?
+    else
+        rc=1
+    fi
+    rm -f "$json"
+    return "$rc"
+}
+
+# emulator_tag NAME CHANNEL - the release tag of the emulator repo autobleem2/NAME that a package of CHANNEL
+# carries; prints the tag (a warning goes to stderr). Fails when the channel has none:
+#   release  the repo's latest full release (releases/latest - never a pre-release)
+#   testing  the newest pre-release tagged v* (what a v*-N tag publishes; never nightly/preview)
+#   nightly  the rolling `nightly` pre-release of its develop branch
+#   preview  the rolling `preview` pre-release of a feature branch (build.yml, channel=preview); when the repo
+#            has none, the nightly - said loudly, a preview of other components still ships a working emulator
+# pcsx-ab is frozen (PCSXAB_FROZEN_TAG): every channel takes that one release.
+emulator_tag() {
+    local name="$1" channel="$2" repo tag=""
+    repo="autobleem2/$name"
+    if [ "$name" = pcsx-ab ]; then printf '%s\n' "$PCSXAB_FROZEN_TAG"; return 0; fi
+    case "$channel" in
+        release) tag="$(_gh_pick "repos/$repo/releases/latest" latest)" || tag="" ;;
+        testing) tag="$(_gh_pick "repos/$repo/releases?per_page=30" testing)" || tag="" ;;
+        nightly) tag=nightly ;;
+        preview)
+            if _gh_json "repos/$repo/releases/tags/preview" >/dev/null 2>&1; then
+                tag=preview
+            else
+                echo "    !!!!!!!! $name has NO preview release - this PREVIEW package falls back to its NIGHTLY emulator !!!!!!!!" >&2
+                tag=nightly
+            fi ;;
+        *) echo "unknown emulator channel '$channel' (release, testing, nightly or preview)" >&2; return 1 ;;
+    esac
+    [ -n "$tag" ] || { echo "$repo has no release for the $channel channel" >&2; return 1; }
+    printf '%s\n' "$tag"
+}
+
+# stage_emulator NAME KEY DEST CHANNEL - the emulator NAME (pcsx-ab -> Autobleem/bin/emu, pcsx-abnxt ->
+# Autobleem/bin/emunxt) of CHANNEL's release (emulator_tag), for the platform KEY (rpi-armhf, rpi-arm64 or
+# pcusb): its NAME-<v>-KEY.tar.gz unpacked into DEST (emptied first). The same published artifact assemble.sh
+# fetches, so a local package carries exactly what the channel's real package would. Fails - never falls back
+# to anything checked in - when the release or the asset is missing or holds no pcsx-ab binary.
+stage_emulator() {
+    local name="$1" key="$2" dest="$3" channel="$4" repo tag id tmp url file
+    repo="autobleem2/$name"
+    tag="$(emulator_tag "$name" "$channel")" || return 1
+    id="$(_gh_pick "repos/$repo/releases/tags/$tag" id)" || id=""
+    [ -n "$id" ] || { echo "no release $tag in $repo" >&2; return 1; }
+    tmp="$(mktemp -d)"
+    # (the asset list of /releases/<id>/assets, not the tag's: see fetch_release_assets)
+    IFS=$'\t' read -r url file <<< "$(_gh_pick "repos/$repo/releases/$id/assets?per_page=100" assets "$name-*-$key.tar.gz" | head -n1)" || true
+    [ -n "${url:-}" ] || { echo "no asset $name-*-$key.tar.gz in $repo@$tag" >&2; rm -rf "$tmp"; return 1; }
+    _gh_asset "$url" "$tmp/$file" || { echo "could not download $repo@$tag $file" >&2; rm -rf "$tmp"; return 1; }
+    rm -rf "${dest:?}"
+    mkdir -p "$dest"
+    tar -xzf "$tmp/$file" -C "$dest"
+    rm -rf "$tmp"
+    [ -f "$dest/pcsx-ab" ] || { echo "$repo@$tag $file holds no pcsx-ab binary" >&2; return 1; }
+    echo "    emulator $name <- $repo@$tag ($channel channel): $file, pcsx-ab md5 $(md5sum "$dest/pcsx-ab" | cut -d' ' -f1)"
+}
