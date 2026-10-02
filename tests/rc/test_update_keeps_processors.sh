@@ -59,6 +59,8 @@ install_over() {
         die() { echo "die: $*" >&2; exit 1; }
         run() { "$@"; }
         install_cover_databases() { :; }
+        package_default_theme() { :; }
+        set_config_theme() { :; }
         DATA_MOUNT="'"$DATA"'"
         STAGE_DIR="'"$STAGE"'"
         SCRIPT_DIR="'"$PAYLOAD_DIR"'"
