@@ -6,23 +6,23 @@
 
 [release]
 # the version the packages show (VERSION file, the launcher's version string); a package may append -<launcher hash>
-version = v2.0.0-alpha1-rc1
+version = v2.0.0-alpha1
 # the channel the launcher is built with (AB_BUILD_CHANNEL): dev | nightly | prerelease | release
 channel = prerelease
 # the extension ABI (the number after sdk= in the SDK stamp of the launcher and of every extension)
 sdk = 8
 targets = psc rpi rpi64 pcusb win
-# win ships three files: the plain package, the product package (with the emulators) and the installer
+# win ships two release files: the product package (with the emulators) and the installer (the plain zip is the dev-host build)
 win_files = product installer
 
 [launcher]
 repo = autobleem
-branch = integration/alpha1
-commit = 9824908c
+branch = develop
+commit = 306ba7d4
 
 [core]
 repo = autobleem-core
-commit = d6ef21b
+commit = 5ba81a0
 
 [themes]
 repo = autobleem-themes
@@ -30,8 +30,8 @@ commit = a9f8045
 
 [emunxt]
 repo = pcsx-abnxt
-commit = b2261f50
-describe = v2.0.0-alpha0-12-gb2261f50
+commit = 5fd8c6fb
+describe = v2.0.0-alpha0-14-g5fd8c6fb
 
 [libpicofe]
 repo = libpicofe
@@ -44,12 +44,12 @@ describe = v2.0.0-alpha2-23-gad56939
 
 [ext_store]
 repo = ext_store
-commit = 9b7a060
+commit = 054c015
 # the extension.ini Version of the bundled Store
 version = 1.0.1
 
 [pscbios]
 repo = console-tools
-commit = 67d799c
+commit = d37e6da
 # the extension.ini Version of the bundled PSC-Bios
 version = 2.0.0
