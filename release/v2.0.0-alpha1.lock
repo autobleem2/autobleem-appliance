@@ -39,8 +39,8 @@ commit = 5ffbdd5
 
 [emu]
 repo = pcsx-ab
-commit = ad56939
-describe = v2.0.0-alpha2-23-gad56939
+commit = 02f6d83
+describe = v1.1-final
 
 [ext_store]
 repo = ext_store
