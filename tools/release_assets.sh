@@ -13,10 +13,11 @@
 # A preview (PLATFORM-20) is a development build too: AB_PREVIEW_REPOS lists the components built from the
 # preview's branch, which come from their rolling `preview` pre-release instead of `nightly` (resolve_tag).
 
-# pcsx-ab is frozen (the owner, 2026-09-27): every package, a nightly and a release alike, takes its
-# v1.0-final release - the build nightly 188 shipped - never its nightly and never the unified VERSION. The
+# pcsx-ab is frozen (the owner, 2026-09-27): every package, a nightly and a release alike, takes one fixed
+# release of it - never its nightly and never the unified VERSION. Since 2026-10-03 (the owner) that is
+# v1.1-final (develop 02f6d83: the C11 pad swap and the E15 low-battery icon); before it v1.0-final. The
 # one other place that names it is assemble.yml's nightly fingerprint.
-PCSXAB_FROZEN_TAG=v1.0-final
+PCSXAB_FROZEN_TAG=v1.1-final
 
 # resolve_tag REPO TAG - TAG, or `preview` when TAG is `nightly` and REPO is one of AB_PREVIEW_REPOS
 resolve_tag() {
