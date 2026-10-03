@@ -46,7 +46,7 @@ describe = v1.1-final
 repo = ext_store
 commit = 054c015
 # the extension.ini Version of the bundled Store
-version = 1.0.1
+version = 1.0.2
 
 [pscbios]
 repo = console-tools
