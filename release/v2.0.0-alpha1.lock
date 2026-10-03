@@ -13,7 +13,7 @@ channel = prerelease
 sdk = 8
 targets = psc rpi rpi64 pcusb win
 # win ships three files: the plain package, the product package (with the emulators) and the installer
-win_files = package product installer
+win_files = product installer
 
 [launcher]
 repo = autobleem

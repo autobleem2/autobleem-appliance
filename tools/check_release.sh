@@ -80,7 +80,9 @@ for dist in "$@"; do
             autobleem-psc-*.zip) unpack psc-zip psc "$f" 1 ;;
             autobleem-psc-*.tar.gz) unpack psc-tar psc "$f" 1 ;;
             autobleem-win-product-*.zip) unpack win-product win "$f" 1 ;;
-            autobleem-win-*.zip) unpack win-package win "$f" 0 ;;
+            # the plain win zip is the dev-host build (AB_TARGET unset, stamp target=dev) for our own PC tests -
+            # it is not released (2026-10-03), so it is not checked; the product zip and the installer are
+            autobleem-win-*.zip) echo "SKIP win-package: $b is the dev-host build, not a release package" ;;
             autobleem-rpi-arm64-*.tar.gz) unpack rpi64-pkg rpi64 "$f" 0 ;;
             autobleem-rpi-armhf-*.tar.gz) unpack rpi-pkg rpi "$f" 0 ;;
             autobleem-pcusb-i386-*.tar.gz) unpack pcusb-pkg pcusb "$f" 0 ;;
