@@ -139,6 +139,12 @@ check_emulators() {
         elif grep -aqF "$want" "$bin"; then pass "$label" "$name stamp = $want"
         else
             got="$(grep -aoE 'v[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9.-]+' "$bin" | sort -u | head -3 | tr '\n' ' ')"
+            # the lock is written before the promote tags the components: an untagged describe
+            # (<tag>-<n>-g<commit>) becomes exactly the release's version once the promote tags that same commit
+            if [[ "$want" =~ -g[0-9a-f]+$ ]] && grep -aoE 'v[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9.-]+' "$bin" | grep -qxF "$VERSION"; then
+                pass "$label" "$name stamp = $VERSION (the lock's $want, tagged by the promote)"
+                continue
+            fi
             fail "$label" "$name stamp: expected $want, found ${got:-no version stamp}$note"
         fi
     done

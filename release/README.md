@@ -12,7 +12,7 @@ Plain ini: `[section]` lines, `key = value` lines, `#` comment lines (never afte
 |---|---|---|
 | `[release]` | `version`, `channel`, `sdk`, `targets`, `win_files` | version, channel, extension ABI |
 | `[launcher]`, `[core]`, `[themes]`, `[libpicofe]` | `repo`, `branch`, `commit` | `launcher.commit` (the hash after the version) |
-| `[emunxt]`, `[emu]` | `repo`, `commit`, `describe` | `describe` must be in the emulator binary |
+| `[emunxt]`, `[emu]` | `repo`, `commit`, `describe` | `describe` must be in the emulator binary - or, when it is an untagged `<tag>-<n>-g<commit>`, the release's own version (the promote tags that commit after the lock is written) |
 | `[ext_store]`, `[pscbios]` | `repo`, `commit`, `version` | `version` = the extension's `extension.ini` |
 
 ## Running it
