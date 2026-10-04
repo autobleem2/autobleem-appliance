@@ -176,7 +176,7 @@ jobs:
           fp=""
           # pcsx-ab is frozen at v1.1-final (tools/release_assets.sh, PCSXAB_FROZEN_TAG): no nightly of it to read
           fp+="pcsx-ab v1.1-final frozen"$'\n'
-          for r in autobleem pcsx-abnxt autobleem-console-tools autobleem-pc-tools proc_unzip ext_store autobleem-themes; do
+          for r in autobleem pcsx-abnxt autobleem-console-tools autobleem-pc-tools proc_unzip proc_pe ext_store autobleem-themes; do
             # (a nightly's lines keep their old label, so a nightly's name does not change with this)
             t=nightly; l="$r"; case " $preview " in *" $r "*) t=preview; l="$r@preview" ;; esac
             id="$(gh api "repos/autobleem2/$r/releases/tags/$t" --jq .id 2>/dev/null || true)"
