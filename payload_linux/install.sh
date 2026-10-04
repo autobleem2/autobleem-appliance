@@ -566,7 +566,7 @@ install_retroarch_source() {
 # playlists can be reached from a PC the same way the PS1 games can. retroarch.cfg (write_retroarch_config)
 # points every RetroArch directory setting in here, and AutoBleem reads info/ and playlists/ for its
 # RetroArch set (Env::getPathToRetroarchDir() is this folder on a Pi).
-RA_SUBDIRS="cores info system roms saves states playlists config assets autoconfig database/rdb database/cursors
+RA_SUBDIRS="cores info system roms saves states savestates playlists config assets autoconfig database/rdb database/cursors
             cheats overlays shaders filters/video filters/audio thumbnails screenshots records logs downloads"
 
 # roms/ gets a folder per system, named the way RetroArch's databases and playlists name them, so that
@@ -671,7 +671,7 @@ system_directory = "$RA_ROOT/system"
 rgui_browser_directory = "$RA_ROOT/roms"
 core_assets_directory = "$RA_ROOT/downloads"
 savefile_directory = "$RA_ROOT/saves"
-savestate_directory = "$RA_ROOT/states"
+savestate_directory = "$RA_ROOT/savestates"
 playlist_directory = "$RA_ROOT/playlists"
 content_database_path = "$RA_ROOT/database/rdb"
 cursor_directory = "$RA_ROOT/database/cursors"
@@ -693,7 +693,29 @@ log_dir = "$RA_ROOT/logs"
 video_fullscreen = "true"
 input_autodetect_enable = "true"
 menu_show_core_updater = "true"
+savestate_auto_save = "true"
+savestate_thumbnail_enable = "true"
+sort_savestates_enable = "false"
+sort_savestates_by_content_enable = "false"
+savestates_in_content_dir = "false"
 EOF
+}
+
+#*******************************
+# write_retroarch_state_keys
+#*******************************
+# The launcher keeps four save-state slots per RetroArch game (EMU-24): RetroArch writes <game>.state.auto and its
+# picture when a game ends, the launcher copies them into a slot. The launcher also pins the folder and the sorting
+# for the games it starts (ra-append.cfg), so these keys matter for the rest (RetroArch started on its own) and for
+# a stick whose retroarch.cfg predates them. savestate_auto_load is the launcher's per launch, never set here, and
+# savestate_directory is not touched on an existing cfg (states already saved there would be left behind).
+write_retroarch_state_keys() {
+    local cfg="$RA_ROOT/retroarch.cfg"
+    set_cfg_key "$cfg" savestate_auto_save true
+    set_cfg_key "$cfg" savestate_thumbnail_enable true
+    set_cfg_key "$cfg" sort_savestates_enable false
+    set_cfg_key "$cfg" sort_savestates_by_content_enable false
+    set_cfg_key "$cfg" savestates_in_content_dir false
 }
 
 #*******************************
@@ -1341,6 +1363,7 @@ create_tree() {
     create_retroarch_tree
     write_retroarch_config
     write_retroarch_core_options
+    write_retroarch_state_keys
 }
 
 #*******************************
