@@ -6,7 +6,9 @@
 # rationale), just sourcing every piece from a release artifact instead of a local build directory. Also
 # writes the two Windows downloads that belong to the same release: AutoBleemInstaller-<v>.zip (the
 # installer, what a console user downloads - it fetches this tarball from the channel picked in it) and
-# UpdateRoms-<v>.zip (step 5), the first with LastResortRecovery/ inside.
+# UpdateRoms-<v>.zip (step 5), the first with LastResortRecovery/ inside. Step 6 makes the two zips to unzip
+# straight onto a stick, autobleem-psc-<v>-base.zip (without RetroArch) and -full.zip (with RetroArch and its
+# cores), neither with a BIOS file (tools/psc_zips.py).
 #
 # This tarball is deliberately NOT self-contained: no RetroArch/ and no cover databases
 # (Autobleem/bin/db/), same as the launcher repo's tools/make_psc_package.sh's tarball branch - AutoBleemInstaller.exe
@@ -171,3 +173,15 @@ PY
 mkzip "AutoBleemInstaller-$VERSION.zip" "$win" AutoBleemInstaller
 mkzip "UpdateRoms-$VERSION.zip" "$win" UpdateRoms
 ls -l "AutoBleemInstaller-$VERSION.zip" "UpdateRoms-$VERSION.zip"
+
+# 6. the stick as two zips to unzip onto a stick (PLATFORM-21, the owner): autobleem-psc-<v>-base.zip = the tarball's
+#    tree plus the cover databases, no RetroArch; autobleem-psc-<v>-full.zip = that plus RetroArch/ (the site's
+#    RetroArch for the console and its cores, laid out as AutoBleemInstaller lays them). Neither carries a BIOS file:
+#    tools/psc_zips.py reads the finished zips back and fails the build on one (see its header). The packs come from
+#    the download site (AB_SITE_URL overrides it), the same place the installer fetches them from. The Windows
+#    installer above and the tarball are unchanged.
+site="${AB_SITE_URL:-https://autobleem.retromenele.pl}"
+echo "==> the stick zips (base and full) from $out and $site"
+"$(command -v python3 || command -v python)" "$(dirname "$0")/tools/psc_zips.py" \
+    --package "$out" --version "$VERSION" --site "$site" --work-dir "$work" --out-dir .
+ls -l "autobleem-psc-$VERSION-base.zip" "autobleem-psc-$VERSION-full.zip"
