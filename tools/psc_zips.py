@@ -3,13 +3,15 @@
 
     autobleem-psc-<version>-base.zip   the stick's file system (autobleem-psc-<version>.tar.gz) plus the cover
                                        databases - no RetroArch/
-    autobleem-psc-<version>-full.zip   the same plus RetroArch/ : the console's RetroArch, its cores, retroarch.cfg
-                                       and the empty folders it keeps its files in
+    autobleem-psc-<version>-full.zip   the same plus everything the installer gives a stick with RetroArch ticked:
+                                       RetroArch/ (the console's RetroArch, its cores, retroarch.cfg, libretro's
+                                       asset bundles, the AutoBleem 2 theme over them), the apps pack (Apps/...)
+                                       and the runtime libraries (Autobleem/lib/{apps,retroarch,modules})
 
-The folder layout is the one AutoBleemInstaller.exe lays down for "RetroArch" ticked (autobleem-core's
-installer_job.cpp: RetroArch/bin/{retroarch,VERSION,cores,info,"Retroarch themes",fonts,assets,...},
-RetroArch/bios, RetroArch/roms) - the libretro asset bundles, the apps pack and the runtime libraries are what the
-installer adds on top. The zips are written from the package and the site's packs directly, member by member.
+The folder layout and the sources are those of AutoBleemInstaller.exe (autobleem-core's installer_job.cpp,
+retroarch()): psc/retroarch, psc/cores, psc/libs and psc/apps from the download site, the bundles assets,
+autoconfig, database-rdb, database-cursors, cheats, overlays and shaders_glsl from buildbot.libretro.com. The zips
+are written from the package and those packs directly, member by member.
 
 No BIOS file goes in, and the build fails when one does: check_zip() reads the finished zip back and refuses a
 known BIOS name, any .bin/.rom/.bios member that is not on the short allow-list of the stick's own files, any
@@ -55,6 +57,11 @@ RA_PLACES = (
     ("theme/OFL.txt", "fonts/OFL.txt"),
 )
 RA_ASSETS_FROM = "theme/assets/"
+# libretro's bundles and where each unpacks under RetroArch/bin (installer_job.cpp's Bundles)
+BUNDLES = (("assets", "assets"), ("autoconfig", "autoconfig"), ("database-rdb", "database/rdb"),
+           ("database-cursors", "database/cursors"), ("cheats", "cheats"), ("overlays", "overlays"),
+           ("shaders_glsl", "shaders"))
+BUILDBOT_URL = "https://buildbot.libretro.com/assets/frontend"
 # the keys of retroarch.cfg: the installer's own (writeRetroArchCfg), then the build's, the theme's, the save states'
 RA_CFG_HEAD = (
     "# Written for the AutoBleem stick zip, as AutoBleem's installer writes it. RetroArch keeps this file up to date\n"
@@ -85,7 +92,7 @@ the other folders are at the top of the stick, then put the stick into the conso
 
 There are two zips of every release:
   base   AutoBleem without RetroArch (smaller).
-  full   AutoBleem with RetroArch and its cores (RetroArch/ on the stick).
+  full   AutoBleem with RetroArch, its cores, libraries, assets and the apps (RetroArch/ on the stick).
 AutoBleemInstaller.exe (a separate download) does the same on a PC and can add RetroArch to a base stick later.
 
 No BIOS files are in either zip. The PlayStation games need none: the console copies its own BIOS at every boot.
@@ -117,13 +124,13 @@ BIOS_NAME_PATTERNS = (
 )
 # a file of these extensions is a BIOS unless it is one of the stick's own, listed here (lower case, full path)
 BIOS_EXTENSIONS = (".bin", ".rom", ".bios")
-OWN_FILES = (
-    "028c18a9-ec4b-4632-b2cf-d4e20f252e8f/lupdata.bin",  # the console's update trigger, not a BIOS
+OWN_PATTERNS = (  # full lower-case paths (fnmatch); each is a .bin that was looked at and is no BIOS
+    "028c18a9-ec4b-4632-b2cf-d4e20f252e8f/lupdata.bin",  # the console's update trigger
+    "apps/sdlpop/data/*.bin", "apps/sdlpop/data/*/*.bin",  # Prince of Persia's own sound and level data
+    "apps/opentyrian/data/exitmsg.bin",  # OpenTyrian's exit text
+    "retroarch/bin/assets/rgui/font/*.bin",  # RetroArch's bitmap fonts (libretro's assets bundle)
 )
 BIOS_README_NAME = "readme.txt"
-# the BIOS list also names plain text and config files some cores keep next to their BIOS (config.ini, ...): a
-# file of these kinds is never taken for a BIOS by name alone
-SAFE_EXTENSIONS = (".ini", ".txt", ".cfg", ".json", ".xml", ".md", ".png", ".jpg", ".ttf", ".ogg", ".wav", ".sh")
 # the BIOS list also names plain text and config files some cores keep next to their BIOS (config.ini, ...): a
 # file of these kinds is never taken for a BIOS by name alone
 SAFE_EXTENSIONS = (".ini", ".txt", ".cfg", ".json", ".xml", ".md", ".png", ".jpg", ".ttf", ".ogg", ".wav", ".sh")
@@ -151,7 +158,7 @@ def bios_problem(member, biospack_names=()):
     parts = low.split("/")
     if "bios" in parts[:-1] and base != BIOS_README_NAME:
         return "a file in a bios folder (only its README may be there)"
-    if low in OWN_FILES:
+    if any(fnmatch.fnmatchcase(low, pat) for pat in OWN_PATTERNS):
         return None
     for pat in BIOS_NAME_PATTERNS:
         if fnmatch.fnmatchcase(base, pat):
@@ -265,8 +272,57 @@ def cfg_keys(text):
     return out
 
 
-def add_retroarch(w, retroarch_zip, cores_tar):
+def add_bundles(w, bin_dir, bundles_dir, theme_assets):
+    """libretro's asset bundles (buildbot.libretro.com/assets/frontend/<name>.zip) under RetroArch/bin/<dest>; the
+    theme's files over the `assets` bundle, a stock file they replace kept as <name>.prab2."""
+    for name, dest in BUNDLES:
+        path = os.path.join(bundles_dir, name + ".zip")
+        n = 0
+        with zipfile.ZipFile(path) as z:
+            for info in z.infolist():
+                member = posixpath.normpath(info.filename)
+                target = "%s/%s/%s" % (bin_dir, dest, member)
+                if info.is_dir():
+                    w.add_dir(target)
+                    continue
+                mtime = time.mktime(info.date_time + (0, 0, -1))
+                if name == "assets" and member in theme_assets:
+                    data, theme_mtime = theme_assets.pop(member)
+                    w.add_bytes(target + ".prab2", z.read(info), 0o644, mtime)
+                    w.add_bytes(target, data, 0o644, theme_mtime)
+                else:
+                    with z.open(info) as f:
+                        w.add_stream(target, f, 0o644, mtime)
+                n += 1
+        if n == 0:
+            raise SystemExit("psc_zips: %s.zip is empty" % name)
+    for member, (data, mtime) in sorted(theme_assets.items()):
+        w.add_bytes("%s/assets/%s" % (bin_dir, member), data, 0o644, mtime)
+
+
+def add_pack(w, tar_path, dest, skip, what):
+    """A dated pack (psc/libs, psc/apps) unpacked under `dest` ('' = the stick's root) as the installer does: its
+    catalog file left out, links skipped (rc/app_env.sh makes them on the console)."""
+    n = 0
+    with tarfile.open(tar_path, "r:gz") as tar:
+        for m in tar:
+            name = posixpath.normpath(m.name)
+            if m.isdir():
+                w.add_dir(posixpath.join(dest, name))
+            elif m.isreg():
+                if name == skip:
+                    continue
+                w.add_stream(posixpath.join(dest, name), tar.extractfile(m), (m.mode & 0o777) | 0o644 | (m.mode & 0o111),
+                             m.mtime)
+                n += 1
+    if n == 0:
+        raise SystemExit("psc_zips: no file in the %s pack" % what)
+    return n
+
+
+def add_retroarch(w, retroarch_zip, cores_tar, bundles_dir, libs_tar, apps_tar):
     bin_dir = "RetroArch/bin"
+    theme_assets = {}
     for d in ("RetroArch/bios", "RetroArch/roms", bin_dir) + tuple("%s/%s" % (bin_dir, x) for x in RA_BIN_DIRS):
         w.add_dir(d)
     w.add_bytes("RetroArch/bios/README.txt", BIOS_README.replace("\n", "\r\n").encode("utf-8"))
@@ -284,12 +340,12 @@ def add_retroarch(w, retroarch_zip, cores_tar):
             with z.open(info) as f:
                 w.add_stream("%s/%s" % (bin_dir, dst), f, 0o755 if src == "retroarch" else 0o644,
                              time.mktime(info.date_time + (0, 0, -1)))
+        # the theme's assets tree goes over libretro's assets bundle (below), as the installer does: a file of the
+        # bundle it replaces is kept once as <name>.prab2
         for n in sorted(names):
             if n.startswith(RA_ASSETS_FROM) and not n.endswith("/"):
                 info = z.getinfo(n)
-                with z.open(info) as f:
-                    w.add_stream("%s/assets/%s" % (bin_dir, n[len(RA_ASSETS_FROM):]), f, 0o644,
-                                 time.mktime(info.date_time + (0, 0, -1)))
+                theme_assets[n[len(RA_ASSETS_FROM):]] = (z.read(n), time.mktime(info.date_time + (0, 0, -1)))
         for cfg in RA_CFG_FROM_ZIP:
             if cfg in names:
                 for k, line in cfg_keys(z.read(cfg).decode("utf-8")):
@@ -308,6 +364,9 @@ def add_retroarch(w, retroarch_zip, cores_tar):
             n += name.startswith("cores/")
     if n == 0:
         raise SystemExit("psc_zips: no core in %s" % os.path.basename(cores_tar))
+    add_bundles(w, bin_dir, bundles_dir, theme_assets)
+    add_pack(w, libs_tar, "Autobleem/lib", "libs.json", "libs")
+    add_pack(w, apps_tar, "", "apps.json", "apps")
     return n
 
 
@@ -362,6 +421,21 @@ def fetch_packs(site, work, args):
         args.cores_tar = os.path.join(work, cores["name"])
         print("    %s (%s cores)" % (cores["name"], cores.get("count", "?")))
         fetch(cores["url"], args.cores_tar, cores.get("sha256"))
+    for attr, kind in (("libs_tar", "libs"), ("apps_tar", "apps")):
+        if not getattr(args, attr):
+            pack = fetch_json("%s/psc/%s/latest.json" % (site, kind))
+            setattr(args, attr, os.path.join(work, pack["name"]))
+            print("    %s (%s)" % (pack["name"], kind))
+            fetch(pack["url"], getattr(args, attr), pack.get("sha256"))
+    if not args.bundles_dir:
+        args.bundles_dir = os.path.join(work, "bundles")
+        os.makedirs(args.bundles_dir, exist_ok=True)
+        for name, _ in BUNDLES:
+            print("    %s.zip (libretro)" % name)
+            dest = os.path.join(args.bundles_dir, name + ".zip")
+            fetch("%s/%s.zip" % (args.buildbot_url.rstrip("/"), name), dest)
+            if not zipfile.is_zipfile(dest):
+                raise SystemExit("psc_zips: %s.zip from %s is not a zip" % (name, args.buildbot_url))
     if not args.covers_dir:
         args.covers_dir = os.path.join(work, "covers")
         os.makedirs(args.covers_dir, exist_ok=True)
@@ -393,7 +467,8 @@ def build(args):
             add_package(w, args.package)
             add_covers(w, args.covers_dir)
             w.add_bytes("Docs/README-zip.txt", ZIP_README.replace("\n", "\r\n").encode("utf-8"))
-            cores = add_retroarch(w, args.retroarch_zip, args.cores_tar) if kind == "full" else 0
+            cores = add_retroarch(w, args.retroarch_zip, args.cores_tar, args.bundles_dir, args.libs_tar,
+                                  args.apps_tar) if kind == "full" else 0
         finally:
             w.close()
         print("%s: %d files%s, %.1f MB" % (os.path.basename(path), w.files, ", %d cores" % cores if cores else "",
@@ -424,6 +499,11 @@ def main():
     ap.add_argument("--covers-dir", help="folder with coversJ.db, coversP.db, coversU.db")
     ap.add_argument("--retroarch-zip", help="retroarch-psc-<tag>.zip from the site's psc/retroarch/")
     ap.add_argument("--cores-tar", help="cores-psc-<date>.tar.gz from the site's psc/cores/")
+    ap.add_argument("--libs-tar", help="libs-psc-<date>.tar.gz from the site's psc/libs/")
+    ap.add_argument("--apps-tar", help="apps-psc-<date>.tar.gz from the site's psc/apps/")
+    ap.add_argument("--bundles-dir", help="folder with libretro's assets, autoconfig, database-rdb, database-cursors, "
+                    "cheats, overlays and shaders_glsl zips")
+    ap.add_argument("--buildbot-url", default=BUILDBOT_URL, help="where --site fetches libretro's bundles from")
     ap.add_argument("--biospack", help="psc/bios/biospack.txt: also refuse every file name it lists")
     ap.add_argument("--site", help="the download site: fetch whatever of the packs above is not given from it")
     ap.add_argument("--work-dir", help="where --site downloads go (default: the system's temporary folder)")
@@ -451,7 +531,7 @@ def main():
             return build(args)
         finally:
             shutil.rmtree(work, ignore_errors=True)
-    for need in ("covers_dir", "retroarch_zip", "cores_tar"):
+    for need in ("covers_dir", "retroarch_zip", "cores_tar", "libs_tar", "apps_tar", "bundles_dir"):
         if not getattr(args, need):
             ap.error("--%s is required (or --site)" % need.replace("_", "-"))
     return build(args)
