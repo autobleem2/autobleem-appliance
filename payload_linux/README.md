@@ -136,11 +136,34 @@ an `.img.xz` from <https://autobleem.retromenele.pl/> and flash it with *Use cus
 What follows is how those images are built.
 
 `tools/make_rpi_image.sh` takes an official Raspberry Pi OS Lite image (downloaded automatically, or your
-own with `--base`) and injects an AutoBleem package plus a first-boot service. The only other changes to the
-base image are on its boot partition: `cmdline.txt` loses the word `resize` (see "The data partition" -
-this is what keeps the root from swallowing the whole card), and `autobleem.txt` is added. cloud-init's
-`user-data`/`network-config` stay exactly as the base image ships them, so Raspberry Pi Imager's own OS
-customisation lands on top of them as on a stock image.
+own with `--base`) and injects an AutoBleem package plus a first-boot service. On its boot partition
+`cmdline.txt` loses the word `resize` (see "The data partition" - this is what keeps the root from swallowing
+the whole card), and `autobleem.txt` is added. cloud-init's `user-data`/`network-config` stay exactly as the
+base image ships them, so Raspberry Pi Imager's own OS customisation lands on top of them as on a stock image.
+
+**The pre-install (PLATFORM-23).** With `proot` (5.5.0 or newer) and `qemu-user-static` available and the build
+running as root in `--rootless` mode (what the build container is), the image's root is also worked on at build
+time, so the first boot has far less to do (`--preinstall auto|yes|no`, default auto: without the tools the
+build is the old injection-only one):
+
+- the distribution packages `install.sh` wants (`install.sh --print-packages` is the list: SDL2, Mesa, exfatprogs,
+  plymouth, and RetroArch's libraries when `--retroarch-tarball` says which RetroArch) are installed - no `apt`
+  on the first boot;
+- plymouth with the AutoBleem theme is selected and the initramfs of every kernel (v6, v7, v8, 2712) rebuilt
+  with it - the splash shows from the first power-on, not from the second boot;
+- `cmdline.txt` gets the quiet splash boot (`quiet loglevel=3 logo.nologo splash ...`, the 1080p HDMI mode) and
+  `config.txt` `disable_splash=1`; `getty@tty1` is masked, so there is no login prompt on the card's own screen -
+  not at the first boot, and not after a failed one (the message stays on tty8; Alt+F2 still gives a login);
+- with `--retroarch-tarball` and `--cores-tarball` (or `--fetch-offline`, which takes the download site's newest
+  for the architecture) RetroArch and its cores/assets are staged in `/opt/autobleem-image/offline/` with a
+  `SHA256SUMS`, and the first boot runs `install.sh --offline` on them: nothing of them is downloaded. The image
+  is about 1.2 GB (32-bit) / 1.6 GB (64-bit) with them.
+
+How: the ext4 root is dumped to a directory with `debugfs rdump` (no mount, no loop device), run under `proot`
+with `qemu-user` doing the foreign architecture (no `binfmt_misc`, no `--privileged`, no host changes),
+`tools/rpi_rootfs.py` restores what rdump drops (setuid/setgid/sticky bits, hard links), and `mke2fs -d` packs it
+back into a root partition grown to fit (same label and UUID, the base image's features). The packages are
+those of the build day: rebuild the image before each tag.
 
 ```bash
 # make_rpi.sh/make_rpi64.sh are the launcher checkout's own; see "Build the package" above for why
@@ -156,14 +179,21 @@ sudo /path/to/autobleem-appliance/tools/make_rpi_image.sh --arch arm64 --package
 ```
 
 Each run downloads that architecture's current "latest" Raspberry Pi OS Lite image (sha256-verified against
-its published checksum), loop-mounts it, drops the package into `/opt/autobleem-image/` on its root
-filesystem alongside `autobleem-firstboot.service` (enabled by hand-crafting the same symlink `systemctl
-enable` would - no chroot, no qemu, nothing from the base image is ever executed at build time), edits the
-boot partition as above, and recompresses it to `<out>/autobleem-<version>-rpi-<arch>.img.xz` - the version is
+its published checksum), loop-mounts it (or, `--rootless`, edits it in place), drops the package into
+`/opt/autobleem-image/` on its root filesystem alongside `autobleem-firstboot.service` (enabled by
+hand-crafting the same symlink `systemctl enable` would), edits the boot partition as above, and recompresses it to `<out>/autobleem-<version>-rpi-<arch>.img.xz` - the version is
 the package's `VERSION` file, which `tools/make_rpi_package.sh` writes from the build's own `version.h`
 (`v2.0.0` for a clean tree at that tag, `v2.0.0-pre0-ad109aa` otherwise; `--version` overrides). `--dry-run`
 prints what it would do without downloading, mounting or needing root; `--help` lists every option
-(`--base`, `--work`, `--out`, `--keep-raw`, `--version`).
+(`--base`, `--work`, `--out`, `--keep-raw`, `--version`, `--preinstall`, `--proot`, `--qemu`, `--retroarch-tarball`,
+`--cores-tarball`, `--fetch-offline`).
+
+A build in the build container, as root, for the pre-install (the container needs `proot` 5.5.0+ - a static
+binary is on its GitHub releases - and `qemu-user-static`):
+
+```bash
+tools/make_rpi_image.sh --arch armhf --rootless --package autobleem-rpi.tar.gz --fetch-offline     --proot /path/to/proot --work build_rpi_image --out build_rpi_image/out
+```
 
 ### What the first boot does
 
@@ -194,16 +224,19 @@ prompts are plain text. It:
    pack; the launcher hides its RetroArch set and menu items when no RetroArch is
    installed. No answer within a minute means yes, so a Pi set up entirely from Imager's presets and left
    alone gets the full install. RetroArch can be added later by running `install.sh` again.
-4. grows the root partition first (`install.sh --grow-root <root_gib> --grow-only`: from the base image's
+4. grows the root partition first (`install.sh --grow-root <root_gib> --grow-only`: from the image's
    ~3 GB to `root_gib`, the rest of the card becomes the `AUTOBLEEM` partition) - the package unpacks to
    over 300 MB and a fresh root has less free than that - then unpacks the package and runs
    `install.sh --yes` with the options from `autobleem.txt` (below), with its whole output on the
-   screen: packages, RetroArch if wanted, cores, BIOS.
+   screen: packages (skipped when the image already has them), RetroArch if wanted and its cores (unpacked
+   from the image's offline folder when it has one), BIOS. Each phase leaves a timestamped line in the log and
+   the run ends with a table of how long each took.
    Box art is not mirrored: the launcher fetches each game's cover when it scans it (see below). The same
    output is kept in `/var/log/autobleem-firstboot-install.log` for reading over ssh.
 5. on success: deletes the staged package, disables itself and reboots once more - the boot splash and HDMI
-   mode only take full effect on the boot after `install.sh` sets them. On failure it says so, gives the
-   login prompt back, and tries again on the next boot (up to 20 times, then it gives up and leaves a note).
+   mode only take full effect on the boot after `install.sh` sets them. On failure it says so on the screen and
+   leaves the message there (the image has no login prompt on tty1 - Alt+F2 gives one on tty2, and ssh works),
+   and tries again on the next boot (up to 20 times, then it gives up and leaves a note).
 
 `journalctl -u autobleem-firstboot` shows the script's own log lines; `systemctl status autobleem-firstboot`
 whether it is still going.
