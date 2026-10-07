@@ -48,6 +48,7 @@ RETROARCH_MODE=prebuilt         # --retroarch: prebuilt (from the download repos
 REPO_URL="${AB_REPO_URL:-https://autobleem.retromenele.pl}"   # --repo: the download repository (CLAUDE.md, "The download repository")
 DO_DOWNLOADS=1                  # --no-downloads: skip the RetroArch cores/assets from buildbot.libretro.com
 DO_BIOS=1                       # --no-bios: skip the BIOS pack (system/biospack*.txt, from github.com/Abdess/retrobios)
+PS1_BIOS_ONLY=0                 # --ps1-bios-only: of the BIOS pack fetch only the PlayStation files (the owner's PS1-only option)
 DO_SAMPLES=1                    # --no-samples: skip the sample games (samples/ on the download repository)
 UPDATE_MODE=0                   # --update: a re-run over an installed Pi from a newer package (the launcher's
                                 # online update, system/autobleem-update.sh): unattended, RetroArch replaced from
@@ -143,6 +144,8 @@ Usage: sudo bash install.sh [options]
   --no-bios            do not download the BIOS pack (system/biospack.txt, biospack-arm64.txt or -i386.txt: ~190-230 MB
                        of console, computer, arcade and ScummVM files from github.com/Abdess/retrobios into RetroArch/system, and
                        the PS1 BIOS for pcsx-ab into System/Bios)
+  --ps1-bios-only      of the BIOS pack fetch only the PlayStation files (scph*.bin, ps1_rom.bin, psxonpsp660.bin - what
+                       pcsx-ab and the PS1 cores use), from the same list and by the same code as the whole pack
   --no-samples         do not install the sample games (a 1 MB pack from the download repository: a homebrew
                        PS1 game in Games/ and, with RetroArch, NES/SNES/Mega Drive homebrew in RetroArch/roms/,
                        each with its box art - so the shelf is not empty on the first start; SAMPLES.md on the
@@ -180,6 +183,7 @@ parse_args() {
             --repo)           REPO_URL="${2:?--repo needs a URL}"; shift 2 ;;
             --no-downloads)   DO_DOWNLOADS=0; shift ;;
             --no-bios)        DO_BIOS=0; shift ;;
+            --ps1-bios-only)  PS1_BIOS_ONLY=1; shift ;;
             --no-samples)     DO_SAMPLES=0; shift ;;
             --update)         UPDATE_MODE=1; ASSUME_YES=1; shift ;;
             --retroarch-tarball) RETROARCH_TARBALL="${2:?--retroarch-tarball needs a file}"; shift 2 ;;
@@ -1036,7 +1040,14 @@ download_bios_pack() {
     # --retroarch none is a PS1-only AutoBleem: nothing reads RetroArch/system but pcsx-ab's two files
     # (install_ps1_bios), so the rest of the ~200 MB pack is not fetched. Same manifest, filtered by name.
     local entries
-    if [ "$RETROARCH_MODE" = none ]; then
+    if [ "$PS1_BIOS_ONLY" -eq 1 ]; then
+        # --ps1-bios-only: the manifest's PlayStation entries - the path (the line after the sha, size and url) is
+        # scph<NNNN>[A-C].bin, ps1_rom.bin or psxonpsp660.bin at the top level, which is what the PS1 cores list as
+        # firmware; the rest of the pack (other systems, arcade, ScummVM) is left out
+        entries="$(grep '^[0-9a-f]' "$manifest" | awk '{ p = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ /, "", p); p = tolower(p) }
+            p ~ /^scph.+\.bin$/ || p == "ps1_rom.bin" || p == "psxonpsp660.bin"')"
+        log "BIOS pack: PS1-only (--ps1-bios-only) - the PlayStation BIOS files of the pack"
+    elif [ "$RETROARCH_MODE" = none ]; then
         # the last field is the destination under RetroArch/system - the PS1 files sit at its top level
         entries="$(grep '^[0-9a-f]' "$manifest" | awk '$4 == "scph5501.bin" || $4 == "scph5500.bin"')"
         log "BIOS pack: PS1-only (--retroarch none) - just the two files pcsx-ab needs"

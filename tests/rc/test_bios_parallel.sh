@@ -83,7 +83,7 @@ done
 
 # --- the harness around the extracted functions ---
 RA_ROOT="$WORK/stick/RetroArch"; mkdir -p "$RA_ROOT/system"
-DATA_MOUNT="$WORK/stick"; DO_BIOS=1; DRY_RUN=0; ARCH=armhf; RETROARCH_MODE=full; LOG="$WORK/install.log"
+DATA_MOUNT="$WORK/stick"; DO_BIOS=1; PS1_BIOS_ONLY=0; DRY_RUN=0; ARCH=armhf; RETROARCH_MODE=full; LOG="$WORK/install.log"
 log()  { echo "$*" >>"$LOG"; }
 warn() { echo "WARN $*" >>"$LOG"; }
 install_ps1_bios() { :; }
@@ -115,6 +115,33 @@ check "the second run asks only for what is missing" test "$(sort -u "$FAKE_LOG"
 check "the dropped file continues at byte 100"  grep -q '^cut.dat resume=1 have=100$' "$FAKE_LOG"
 check "the continued file is whole and checked" test "$(cat "$RA_ROOT/system/cut.dat")" = "$(body cut.dat)"
 check "the counter line is on the screen"       grep -q '13/ 13' "$WORK/run2.out"
+
+# --- --ps1-bios-only: only the PlayStation entries of the same manifest, resume and a second run as above ---
+rm -rf "$SITE" "$WORK/stick"; mkdir -p "$SITE" "$WORK/stick/RetroArch/system"
+: >"$manifest"
+for name in scph5501.bin SCPH1001.BIN ps1_rom.bin psxonpsp660.bin "scph9002(7502).bin" acpsx.zip gba_bios.bin disksys.rom \
+            "sub dir/scph5500.bin"; do
+    file="${name##*/}"
+    body "$file" >"$SITE/$file"
+    printf '%s %s http://fake/%s %s\n' "$(sha256sum "$SITE/$file" | cut -d' ' -f1)" 300 "$file" "$name" >>"$manifest"
+done
+: >"$FAKE_LOG"; : >"$LOG"; PS1_BIOS_ONLY=1
+# a part an earlier run left (the true first 100 bytes) is continued
+body psxonpsp660.bin | head -c 100 >"$RA_ROOT/system/psxonpsp660.bin.part"
+download_bios_pack >"$WORK/run3.out" 2>&1
+asked="$(cut -d" " -f1 "$FAKE_LOG" | LC_ALL=C sort | tr '\n' ' ')"
+check "PS1-only asks only for the PlayStation entries" \
+    test "$asked" = "SCPH1001.BIN ps1_rom.bin psxonpsp660.bin scph5501.bin scph9002(7502).bin "
+check "PS1-only: the other systems are not on the stick" \
+    test ! -e "$RA_ROOT/system/gba_bios.bin" -a ! -e "$RA_ROOT/system/acpsx.zip" -a ! -e "$RA_ROOT/system/disksys.rom" \
+         -a ! -e "$RA_ROOT/system/sub dir"
+check "PS1-only: the files arrive whole"        test "$(cat "$RA_ROOT/system/scph5501.bin")" = "$(body scph5501.bin)"
+check "PS1-only: a left part is continued"      grep -q '^psxonpsp660.bin resume=1 have=100$' "$FAKE_LOG"
+check "PS1-only: the counter says 5 files"      grep -q '5/  5' "$WORK/run3.out"
+: >"$FAKE_LOG"
+download_bios_pack >"$WORK/run4.out" 2>&1
+check "PS1-only: a second run asks for nothing" test ! -s "$FAKE_LOG"
+check "PS1-only: and reports them kept"         grep -q '0 downloaded, 5 already there' "$LOG"
 
 [ -n "${DEBUG_BIOS_TEST:-}" ] && { cat "$FAKE_LOG"; cat "$LOG"; }
 [ "$fail" -eq 0 ] && echo "PASS" || echo "FAILED"
