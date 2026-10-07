@@ -858,8 +858,12 @@ inject_boot_files() {
         if [ "$PREINSTALLED" -eq 1 ]; then
             # no rainbow square from the firmware (config.txt's business, not the kernel's)
             mcopy -o -i "$RAW_IMG@@$BOOT_OFF" ::config.txt "$WORK_DIR/config.txt" || die "no config.txt on the boot partition"
-            grep -q '^disable_splash=' "$WORK_DIR/config.txt" \
-                || printf '\n[all]\n# AutoBleem: no rainbow square from the firmware\ndisable_splash=1\n' >>"$WORK_DIR/config.txt"
+            if ! grep -q '^disable_splash=' "$WORK_DIR/config.txt"; then
+                # in its own [all] section (it applies whatever [model] filter the file ends under) - the base
+                # image's config.txt already ends with one
+                [ "$(grep -v '^[[:space:]]*$' "$WORK_DIR/config.txt" | tail -1 | tr -d '\r')" = "[all]" ] || printf '\n[all]\n' >>"$WORK_DIR/config.txt"
+                printf '# AutoBleem: no rainbow square from the firmware\ndisable_splash=1\n' >>"$WORK_DIR/config.txt"
+            fi
             mcopy -o -i "$RAW_IMG@@$BOOT_OFF" "$WORK_DIR/config.txt" ::config.txt || die "writing config.txt failed"
             rm -f "$WORK_DIR/config.txt"
         fi
