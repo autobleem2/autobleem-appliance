@@ -38,11 +38,11 @@ stage_themes "$STAGE"
 # System/ in the package: payload_linux already has system/, and a case-insensitive filesystem cannot hold both)
 # shellcheck disable=SC2086 - KEYS is a list on purpose
 stage_processor autobleem2/proc_unzip unzip "$STAGE/processors" $KEYS
-# proc_pe turns the PE packages (.mod) the Store hands out into Apps; the Raspberry Pi 32-bit runs the PE ports (APPS-13,
-# the launcher's package brings rc/pe_run.sh and rc/pe_env.sh), the other Linux packages have no PE Apps
-case "$PLATFORM" in
-  rpi-armhf) stage_processor autobleem2/proc_pe pe "$STAGE/processors" $KEYS ;;
-esac
+# proc_pe turns the PE packages (.mod) the Store hands out into Apps; every Linux appliance (the Raspberry Pi 32 and 64 bit, the
+# PC stick) runs the PE ports (APPS-13, the launcher's package brings rc/pe_run.sh and rc/pe_env.sh) and gets its own binary
+# by $KEYS (linux-armhf, linux-arm64, linux-i386)
+# shellcheck disable=SC2086
+stage_processor autobleem2/proc_pe pe "$STAGE/processors" $KEYS
 # the bundled extension, the AutoBleem Store (the owner, 2026-09-25) - install.sh copies extensions/<name>/ into
 # the data partition's Extensions/ on every install and update
 stage_extension autobleem2/ext_store store "$EXT" "$STAGE/extensions" "$STAGE/Autobleem/bin/autobleem/autobleem-gui"
