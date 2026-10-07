@@ -977,6 +977,42 @@ download_thumbnails() {
 }
 
 #*******************************
+# bios_fetch_one
+#*******************************
+# One line of the BIOS manifest ("<sha256> <size> <url> <path>", the path may hold spaces) into $RA_ROOT/system/<path>;
+# prints "KEPT|OK|FAIL <path>". Exported to the xargs workers of download_bios_pack, so it uses nothing of the
+# script but RA_ROOT. A file with the right hash is kept; else it is fetched to <path>.part (wget -c continues a part
+# an interrupted run left), checked and renamed. A part whose bytes turn out wrong is dropped and the file fetched
+# whole once more; a lost connection or a 404 leaves the part for the next run.
+bios_fetch_one() {
+    local sha size url dest target part try
+    read -r sha size url dest <<<"$1"
+    [ -n "$dest" ] || return 0
+    target="$RA_ROOT/system/$dest"
+    part="$target.part"
+    if [ -f "$target" ] && [ "$(sha256sum "$target" | cut -d' ' -f1)" = "$sha" ]; then
+        echo "KEPT $dest"
+        return 0
+    fi
+    mkdir -p "$(dirname "$target")"
+    for try in 1 2; do
+        if wget -q -c -O "$part" "$url"; then
+            if [ "$(sha256sum "$part" | cut -d' ' -f1)" = "$sha" ]; then
+                mv -f "$part" "$target"
+                echo "OK $dest"
+                return 0
+            fi
+            rm -f "$part"
+        else
+            break
+        fi
+    done
+    [ -s "$part" ] || rm -f "$part"
+    echo "FAIL $dest"
+    return 0
+}
+
+#*******************************
 # download_bios_pack
 #*******************************
 # The BIOS files the cores need, into RetroArch/system/. system/biospack.txt (armhf) or
@@ -1014,28 +1050,23 @@ download_bios_pack() {
         printf '    would copy scph5501.bin/scph5500.bin to %s/System/Bios as romw.bin/romJP.bin if not there\n' "$DATA_MOUNT"
         return 0
     fi
-    log "BIOS pack: $total files into $RA_ROOT/system (only what is missing)"
-    local sha size url dest target count=0 fetched=0 failed=0
-    while read -r sha size url dest; do
-        [ -n "$dest" ] || continue
-        count=$((count + 1))
-        printf '\r    [%3d/%3d] %3d%% %-50.50s' "$count" "$total" "$((count * 100 / total))" "$dest"
-        target="$RA_ROOT/system/$dest"
-        if [ -f "$target" ] && [ "$(sha256sum "$target" | cut -d' ' -f1)" = "$sha" ]; then
-            continue
-        fi
-        mkdir -p "$(dirname "$target")"
-        if wget -q -O "$target.part" "$url" \
-           && [ "$(sha256sum "$target.part" | cut -d' ' -f1)" = "$sha" ]; then
-            mv -f "$target.part" "$target"
-            fetched=$((fetched + 1))
-        else
-            rm -f "$target.part"
-            failed=$((failed + 1))
-        fi
-    done < <(echo "$entries")
-    printf '\n'
-    log "BIOS pack: $fetched downloaded, $((count - fetched - failed)) already there"
+    log "BIOS pack: $total files into $RA_ROOT/system (only what is missing, 4 at a time)"
+    # four workers (xargs -P 4), each file by bios_fetch_one: a part an interrupted run left is continued (wget -c),
+    # every result is one line the counter below turns into the running percentage
+    local results
+    results="$(mktemp /tmp/autobleem-bios.XXXXXX)"
+    export RA_ROOT
+    export -f bios_fetch_one
+    printf '%s\n' "$entries" | xargs -d '\n' -P 4 -I{} bash -c 'bios_fetch_one "$1"' _ {} \
+        | tee "$results" \
+        | awk -v total="$total" '{ n++; printf "\r    [%3d/%3d] %3d%% %-50.50s", n, total, n * 100 / total, substr($0, index($0, " ") + 1); fflush() }
+                                 END { printf "\n" }'
+    local fetched kept failed
+    fetched="$(grep -c '^OK ' "$results" || true)"
+    kept="$(grep -c '^KEPT ' "$results" || true)"
+    failed="$(grep -c '^FAIL ' "$results" || true)"
+    rm -f "$results"
+    log "BIOS pack: $fetched downloaded, $kept already there"
     [ "$failed" -eq 0 ] || warn "$failed BIOS files did not download or did not match their hash - run the installer again"
     sync
     install_ps1_bios

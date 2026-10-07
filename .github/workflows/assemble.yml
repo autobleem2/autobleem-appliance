@@ -10,7 +10,8 @@
 # appliances' install-time fetches (the console has no network at all, so AutoBleemInstaller.exe fetches
 # those on the PC instead - see assemble-psc.sh's own header). The same job also makes the two zips to unzip onto
 # a stick, autobleem-psc-<version>-base.zip and -full.zip (with RetroArch and its cores), neither with a BIOS file
-# (PLATFORM-21, tools/psc_zips.py). psc is in the default platforms since
+# (PLATFORM-21, tools/psc_zips.py), and AutoBleemInstaller-<version>-full.zip - the installer with the packs it would
+# download beside it (PLATFORM-23, tools/psc_bundle.py). psc is in the default platforms since
 # v2.0.0-alpha2 (proven by dispatch runs 2026-09-23), so a v* tag assembles and publishes it with the rest.
 #
 # Platform "win" is the Windows product (assemble-win.sh): the launcher's program folder (publish-launcher.yml's
@@ -252,12 +253,16 @@ jobs:
       # PLATFORM-21: the PSC's two stick zips must carry no BIOS file. assemble-psc.sh's own step already fails on
       # one; this reads the files that are about to be published once more, on their own, so the guarantee does not
       # depend on that step alone.
-      - name: The PSC stick zips carry no BIOS file
+      - name: The PSC stick zips and the installer bundle carry no BIOS file
         if: matrix.platform == 'psc'
         run: |
           set -euo pipefail
           ls autobleem-psc-*-base.zip autobleem-psc-*-full.zip
           python3 tools/psc_zips.py --check autobleem-psc-*-base.zip autobleem-psc-*-full.zip
+          # PLATFORM-23: AutoBleemInstaller-<v>-full.zip carries the packs the installer would download - read through
+          # the archives inside it, on their own, like the zips above
+          ls AutoBleemInstaller-*-full.zip
+          python3 tools/psc_bundle.py --check AutoBleemInstaller-*-full.zip
       - uses: actions/upload-artifact@v7
         with:
           name: payload-${{ matrix.platform }}
