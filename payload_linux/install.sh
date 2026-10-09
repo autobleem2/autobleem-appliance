@@ -53,6 +53,9 @@ UPDATE_MODE=0                   # --update: a re-run over an installed Pi from a
                                 # online update, system/autobleem-update.sh): unattended, RetroArch replaced from
                                 # the repository only when it is installed, nothing repartitioned
 RETROARCH_TARBALL=""            # --retroarch-tarball: a prebuilt RetroArch already downloaded (the online update)
+OFFLINE_DIR=""                  # --offline: a folder with the RetroArch and cores tarballs (the Pi image carries them), see offline_setup()
+CORES_TARBALL=""                # --cores-tarball: the cores + assets tarball already downloaded (set by --offline too)
+PRINT_PACKAGES=0                # --print-packages: list the distribution packages this install wants, and stop
 THUMBNAILS=none                 # --thumbnails: none (the launcher fetches each game's cover itself) | boxarts (the whole
                                 # PS1 set, ~350 MB, for covers offline) | all (+ title screens, snaps)
 RA_ROOT=""                      # $DATA_MOUNT/RetroArch once the mount point is known
@@ -152,6 +155,12 @@ Usage: sudo bash install.sh [options]
                        repartitioning; everything already there is kept (config.ini, cores, BIOS, samples)
   --retroarch-tarball FILE  install this prebuilt RetroArch tarball (already downloaded and checked) instead
                        of fetching one - what the online update hands over
+  --offline DIR        RetroArch and its cores/assets from the tarballs in DIR (retroarch.tar.gz, cores.tar.gz, checked
+                       against DIR/SHA256SUMS) instead of the download site - what the Raspberry Pi image carries, so
+                       its first boot downloads no RetroArch at all. A missing or damaged file falls back to the site
+  --cores-tarball FILE install this cores + assets tarball (already downloaded and checked) instead of fetching one
+  --print-packages     print the distribution packages this install wants (one per line) and stop - what the image
+                       build pre-installs (run it with --platform rpi inside the image's root)
   --yes                answer every confirmation with YES (unattended runs; --shrink-root repartitions!)
   --dry-run            print what would happen and change nothing
   -h, --help           this text
@@ -183,6 +192,9 @@ parse_args() {
             --no-samples)     DO_SAMPLES=0; shift ;;
             --update)         UPDATE_MODE=1; ASSUME_YES=1; shift ;;
             --retroarch-tarball) RETROARCH_TARBALL="${2:?--retroarch-tarball needs a file}"; shift 2 ;;
+            --offline)        OFFLINE_DIR="${2:?--offline needs a directory}"; shift 2 ;;
+            --cores-tarball)  CORES_TARBALL="${2:?--cores-tarball needs a file}"; shift 2 ;;
+            --print-packages) PRINT_PACKAGES=1; shift ;;
             --thumbnails)     THUMBNAILS="${2:?--thumbnails needs boxarts, all or none}"; shift 2 ;;
             --yes)            ASSUME_YES=1; shift ;;
             --dry-run)        DRY_RUN=1; shift ;;
@@ -339,33 +351,120 @@ pkg_first_available() {
 }
 
 #*******************************
+# base_packages / packages_present
+#*******************************
+# What the launcher needs from the distribution, one name per line - the single list: install_packages installs
+# it, and tools/make_rpi_image.sh asks for it (--print-packages, run inside the image's root) to pre-install
+# it at image build time. SDL2 is what autobleem-gui draws with (pcsx-ab too, plus libpng16 for its
+# screenshots and skin). libgl1 + libgl1-mesa-dri (with libegl1/libgles2/libgbm1) are the GL SDL's "opengl"
+# renderer dlopens on KMS: SDL2 does not depend on them, and without libGL.so.1 it silently falls back to a
+# context with no shaders and no render targets - the launcher runs and shows a black screen (the first
+# 64-bit image, 2026-09-20; on the 32-bit card they had come in with RetroArch's source-build packages).
+# exfatprogs formats the data partition; parted creates it; wget/unzip fetch the RetroArch cores.
+base_packages() {
+    printf '%s\n' libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0 \
+        libgl1 libgl1-mesa-dri libegl1 libgles2 libgbm1
+    pkg_pick libpng16-16t64 libpng16-16
+    printf '%s\n' zlib1g exfatprogs parted alsa-utils wget unzip ca-certificates
+}
+
+# the first of the given names dpkg has installed; none installed: the first apt can install (pkg_first_available).
+# An image that already carries the packages is thus recognised with no apt lists and no network.
+pkg_pick() {
+    local name
+    for name in "$@"; do
+        if [ "$(dpkg-query -W -f='${db:Status-Status}' "$name" 2>/dev/null)" = installed ]; then
+            echo "$name"
+            return 0
+        fi
+    done
+    pkg_first_available "$@"
+}
+
+# the runtime packages a prebuilt RetroArch lists in retroarch.depends (Bookworm names; the t64 spelling is
+# tried too, for Trixie). FILE: the list itself, or - the one inside a RetroArch tarball.
+retroarch_depends_packages() {
+    local src="${1:-/usr/local/share/autobleem/retroarch.depends}" p
+    [ -f "$src" ] || return 0
+    case "$src" in
+        *.tar.gz) tar -xzOf "$src" ./usr/local/share/autobleem/retroarch.depends 2>/dev/null ;;
+        *)        cat "$src" ;;
+    esac | while read -r p; do
+        [ -n "$p" ] && pkg_pick "$p" "${p}t64"
+    done
+}
+
+# true when dpkg has every given package installed - no network, no apt lock, so a card whose image already
+# carries the packages (tools/make_rpi_image.sh's pre-install) skips apt altogether
+packages_present() {
+    local p
+    for p in "$@"; do
+        [ "$(dpkg-query -W -f='${db:Status-Status}' "$p" 2>/dev/null)" = installed ] || return 1
+    done
+    return 0
+}
+
+APT_UPDATED=0
+# not fatal: a Pi with no network but a warm apt cache can still have everything that is needed
+apt_update_once() {
+    [ "$APT_UPDATED" -eq 1 ] && return 0
+    APT_UPDATED=1
+    if ! run apt-get update; then
+        warn "apt-get update failed - carrying on with whatever is already cached"
+    fi
+}
+
+#*******************************
 # install_packages
 #*******************************
 install_packages() {
     [ "$DO_PACKAGES" -eq 1 ] || { log "skipping apt (--no-packages)"; return 0; }
 
-    log "Installing packages"
-    # not fatal: a Pi with no network but a warm apt cache can still have everything that is needed
-    if ! run apt-get update; then
-        warn "apt-get update failed - carrying on with whatever is already cached"
+    local pkgs=()
+    mapfile -t pkgs < <(base_packages)
+    if packages_present "${pkgs[@]}"; then
+        log "Packages: all ${#pkgs[@]} are in the system already (the image installed them) - skipping apt"
+    else
+        log "Installing packages"
+        apt_update_once
+        run apt-get install -y "${pkgs[@]}"
     fi
-
-    # SDL2 is what autobleem-gui draws with (pcsx-ab too, plus libpng16 for its screenshots and skin).
-    # libgl1 + libgl1-mesa-dri (with libegl1/libgles2/libgbm1) are the GL SDL's "opengl" renderer dlopens on
-    # KMS: SDL2 does not depend on them, and without libGL.so.1 it silently falls back to a context with no
-    # shaders and no render targets - the launcher runs and shows a black screen (the first 64-bit image,
-    # 2026-09-20; on the 32-bit card they had come in with RetroArch's source-build packages). exfatprogs
-    # formats the data partition; parted creates it; wget/unzip fetch the RetroArch cores.
-    run apt-get install -y \
-        libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0 \
-        libgl1 libgl1-mesa-dri libegl1 libgles2 libgbm1 \
-        "$(pkg_first_available libpng16-16t64 libpng16-16)" zlib1g \
-        exfatprogs parted alsa-utils wget unzip ca-certificates
 
     # the boot splash. Lite ships without plymouth; the "script" plugin the theme uses is in the core package.
-    if [ "$BOOT_SPLASH" -eq 1 ]; then
+    if [ "$BOOT_SPLASH" -eq 1 ] && ! packages_present plymouth; then
+        apt_update_once
         run apt-get install -y plymouth || warn "plymouth did not install - there will be no boot splash"
     fi
+}
+
+#*******************************
+# offline_setup
+#*******************************
+# --offline DIR: the Raspberry Pi image carries RetroArch and its cores/assets (tools/make_rpi_image.sh
+# --retroarch-tarball/--cores-tarball) as DIR/retroarch.tar.gz and DIR/cores.tar.gz with DIR/SHA256SUMS. Each
+# file that checks out becomes the tarball install_retroarch_prebuilt / download_cores_tarball unpack, so the
+# first boot makes no request for them; one that is missing or damaged is left out and the download site
+# supplies it, as without --offline.
+offline_setup() {
+    [ -n "$OFFLINE_DIR" ] || return 0
+    if [ ! -d "$OFFLINE_DIR" ]; then
+        warn "--offline: no folder $OFFLINE_DIR - everything comes from the download site"
+        return 0
+    fi
+    local f
+    for f in retroarch.tar.gz cores.tar.gz; do
+        [ -f "$OFFLINE_DIR/$f" ] || continue
+        if [ -f "$OFFLINE_DIR/SHA256SUMS" ] \
+           && ( cd "$OFFLINE_DIR" && grep -E "^[0-9a-f]{64} [ *]$f\$" SHA256SUMS | sha256sum -c --status - ); then
+            case "$f" in
+                retroarch.tar.gz) [ -n "$RETROARCH_TARBALL" ] || RETROARCH_TARBALL="$OFFLINE_DIR/$f" ;;
+                cores.tar.gz)     [ -n "$CORES_TARBALL" ] || CORES_TARBALL="$OFFLINE_DIR/$f" ;;
+            esac
+            log "Offline: $f is in the image and checks out"
+        else
+            warn "Offline: $f does not match its checksum in $OFFLINE_DIR/SHA256SUMS - fetching it from the download site instead"
+        fi
+    done
 }
 
 #*******************************
@@ -470,16 +569,20 @@ PY
 # is tried too, for Trixie)
 install_retroarch_depends() {
     [ "$DO_PACKAGES" -eq 1 ] && [ -f /usr/local/share/autobleem/retroarch.depends ] || return 0
-    local pkgs=() p
-    while read -r p; do
-        [ -n "$p" ] && pkgs+=("$(pkg_first_available "$p" "${p}t64")")
-    done < /usr/local/share/autobleem/retroarch.depends
+    local pkgs=()
+    mapfile -t pkgs < <(retroarch_depends_packages)
+    if packages_present "${pkgs[@]}"; then
+        log "RetroArch's libraries are in the system already - skipping apt"
+        return 0
+    fi
+    apt_update_once
     run apt-get install -y "${pkgs[@]}" \
         || warn "not every library RetroArch needs could be installed (${pkgs[*]}) - it may not start"
 }
 
 install_retroarch_apt() {
     [ "$DO_PACKAGES" -eq 1 ] || { log "skipping RetroArch from apt (--no-packages)"; return 0; }
+    apt_update_once
     if ! run apt-get install -y retroarch; then
         warn "could not install retroarch from apt - the RetroArch set and 'Play using RA' will not work"
     fi
@@ -499,7 +602,7 @@ install_retroarch_source() {
             | awk -F/ '{print $NF}' | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' | sort -V | tail -1)" || true
     if [ -z "$tag" ]; then
         # git is not installed yet on a fresh Lite image, or there is no network
-        if [ "$DO_PACKAGES" -eq 1 ] && run apt-get install -y git; then
+        if [ "$DO_PACKAGES" -eq 1 ] && apt_update_once && run apt-get install -y git; then
             tag="$(git ls-remote --tags --refs https://github.com/libretro/RetroArch.git 2>/dev/null \
                     | awk -F/ '{print $NF}' | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' | sort -V | tail -1)" || true
         fi
@@ -515,6 +618,7 @@ install_retroarch_source() {
     if [ "$DO_PACKAGES" -eq 1 ]; then
         # KMS/EGL/GLES output, udev pads, ALSA sound. No X11, no Wayland, no Qt, no ffmpeg recording. A PC's
         # Mesa drivers speak desktop OpenGL too, which more cores and shaders expect than GLES.
+        apt_update_once
         local gl_dev=""
         [ "$PLATFORM" = pcusb ] && gl_dev="$(pkg_first_available libgl-dev libgl1-mesa-dev)"
         # shellcheck disable=SC2086
@@ -852,6 +956,21 @@ download_cores_tarball() {
     local url sha date
     if [ -n "$(ls -A "$RA_ROOT/cores" 2>/dev/null)" ]; then
         return 1
+    fi
+    if [ -n "$CORES_TARBALL" ]; then
+        # already here (the image's offline folder, or the caller's download): no request at all
+        [ -f "$CORES_TARBALL" ] || { warn "no such file: $CORES_TARBALL - downloading the cores instead"; return 1; }
+        if [ "$DRY_RUN" -eq 1 ]; then
+            printf '    would unpack %s into %s\n' "$CORES_TARBALL" "$RA_ROOT"
+            return 0
+        fi
+        log "RetroArch: unpacking the cores and assets from $CORES_TARBALL into $RA_ROOT"
+        if ! tar -xzf "$CORES_TARBALL" -C "$RA_ROOT" --no-same-owner --no-same-permissions; then
+            warn "could not unpack $CORES_TARBALL - downloading the cores one by one instead"
+            return 1
+        fi
+        log "RetroArch: $(ls "$RA_ROOT/cores" | grep -c '_libretro\.so$') cores installed"
+        return 0
     fi
     command -v python3 >/dev/null 2>&1 || return 1
     mkdir -p "$(dirname "$latest")"
@@ -1902,7 +2021,7 @@ summary() {
 
   Start it now without rebooting:   sudo systemctl start autobleem
   Watch what it does:               sudo journalctl -u autobleem -f
-  Stop it owning the screen:        sudo systemctl disable --now autobleem && sudo systemctl enable --now getty@tty1
+  Stop it owning the screen:        sudo systemctl disable --now autobleem && sudo systemctl unmask getty@tty1 && sudo systemctl enable --now getty@tty1
 
   Alt+F2 gives you a login prompt if the launcher ever fails to come up. Enabling SSH before you reboot is a
   good idea: $(ssh_hint)
@@ -1922,12 +2041,39 @@ EOF
 # "@@phase N/M text" lines for autobleem-firstboot.sh's screen (system/autobleem-install-ui.py), which
 # turns them into its first progress bar; only with AB_UI_MARKERS=1, a terminal never sees them
 PHASES=9
-phase() { [ "${AB_UI_MARKERS:-0}" = 1 ] && printf '@@phase %s/%s %s\n' "$1" "$PHASES" "$2"; return 0; }
+# Every phase also leaves a timestamped line in the log (PLATFORM-23: where the first boot's minutes go), and
+# the summary prints the table: how long each phase took, for the next measurement without a stopwatch.
+PHASE_T0="$(date +%s)"
+PHASE_NAME=""
+PHASE_START="$PHASE_T0"
+PHASE_TABLE=""
+phase_end() {
+    [ -n "$PHASE_NAME" ] || return 0
+    local now
+    now="$(date +%s)"
+    PHASE_TABLE="$PHASE_TABLE$(printf '  %-34s %5s s' "$PHASE_NAME" "$((now - PHASE_START))")
+"
+    PHASE_START="$now"
+}
+phase() {
+    phase_end
+    PHASE_NAME="$1/$PHASES $2"
+    printf '==> [%s +%ss] phase %s/%s: %s\n' "$(date +%H:%M:%S)" "$(($(date +%s) - PHASE_T0))" "$1" "$PHASES" "$2"
+    [ "${AB_UI_MARKERS:-0}" = 1 ] && printf '@@phase %s/%s %s\n' "$1" "$PHASES" "$2"
+    return 0
+}
 
 main() {
     parse_args "$@"
+    if [ "$PRINT_PACKAGES" -eq 1 ]; then
+        base_packages
+        [ "$BOOT_SPLASH" -eq 1 ] && echo plymouth
+        retroarch_depends_packages "${RETROARCH_TARBALL:-}"
+        exit 0
+    fi
     phase 1 "Preparing"
     preflight
+    offline_setup
     phase 2 "The system partition"
     maybe_grow_root             # --grow-root: the root must have room before apt fills it
     if [ "$GROW_ONLY" -eq 1 ]; then
@@ -1957,6 +2103,9 @@ main() {
     configure_boot
     unblock_bluetooth
     sync
+    phase_end
+    log "Phase timings (total $(($(date +%s) - PHASE_T0)) s):"
+    printf '%s' "$PHASE_TABLE"
     summary
 }
 

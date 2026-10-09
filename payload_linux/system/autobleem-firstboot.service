@@ -11,11 +11,15 @@ ConditionPathExists=!/opt/autobleem-image/.done
 # This unit is meant to run after both have had their turn, not race them; After= on a unit that is not
 # active is a no-op. network-online.target is only a best-effort wait: the script asks for WiFi itself when
 # there is still no network, so a Pi with none configured is not stuck.
-After=multi-user.target network-online.target cloud-final.service userconfig.service
+After=multi-user.target network-online.target cloud-final.service userconfig.service plymouth-start.service
 Wants=network-online.target
+# plymouth-start: the image carries the boot splash (PLATFORM-23); the script ends it with `plymouth quit
+# --retain-splash` before switching to tty8, so the logo stays under the setup screen's first frame. Ordered
+# after plymouth-start only - NOT before plymouth-quit.service: multi-user.target is After= its wants, and this
+# unit is After= multi-user.target, so a Before=plymouth-quit would be a dependency cycle.
 # The first boot is watched and answered on the screen. It runs on its own virtual terminal, tty8 - the
 # same way Raspberry Pi OS's own user-creation wizard (userconfig.service) does - and the script switches
-# the screen to it (chvt) and back to tty1 when it is done without rebooting. Not tty1 with
+# the screen to it (chvt); a run that fails keeps its message there (the image has no login prompt on tty1). Not tty1 with
 # Conflicts=getty@tty1.service: both start jobs sit in the same boot transaction, and systemd resolves that
 # conflict by silently dropping the job that is only Wanted - this one. It never ran at all that way (first
 # boot of the second image, 2026-09-19). tty8 has no getty (logind's autovt covers tty2-6 only).

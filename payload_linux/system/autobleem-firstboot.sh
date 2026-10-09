@@ -23,6 +23,7 @@ set -uo pipefail
 
 IMAGE_DIR=/opt/autobleem-image
 MARKER="$IMAGE_DIR/.done"
+OFFLINE_DIR="$IMAGE_DIR/offline"     # RetroArch + cores tarballs, when the image was built with them
 ATTEMPTS_FILE="$IMAGE_DIR/.attempts"
 MAX_ATTEMPTS=20
 SELF_SERVICE=autobleem-firstboot.service
@@ -51,12 +52,12 @@ if [ "$PLATFORM" = pcusb ]; then MACHINE="this PC"; else MACHINE="this Pi"; fi
 INSTALL_LOG=/var/log/autobleem-firstboot-install.log   # install.sh's output, for a look after the fact (ssh)
 log() {
     [ "$UI_MODE" = plain ] && printf '\033[1;32m==>\033[0m %s\n' "$*"
-    printf '==> %s\n' "$*" >>"$INSTALL_LOG" 2>/dev/null || true
+    printf '==> [%s] %s\n' "$(date +%T)" "$*" >>"$INSTALL_LOG" 2>/dev/null || true
     logger -t autobleem-firstboot -- "$*" 2>/dev/null || true
 }
 warn() {
     [ "$UI_MODE" = plain ] && printf '\033[1;33m[!]\033[0m %s\n' "$*"
-    printf '[!] %s\n' "$*" >>"$INSTALL_LOG" 2>/dev/null || true
+    printf '[!] [%s] %s\n' "$(date +%T)" "$*" >>"$INSTALL_LOG" 2>/dev/null || true
     logger -t autobleem-firstboot -p user.warning -- "$*" 2>/dev/null || true
 }
 
@@ -64,13 +65,26 @@ disarm() {
     systemctl disable "$SELF_SERVICE" >/dev/null 2>&1 || true
 }
 
-# The unit runs on tty8 (see the service file); the screen is switched to it here, and back to tty1 - the
-# login prompt, untouched all along - by a run that ends without a reboot.
+# The unit runs on tty8 (see the service file); the screen is switched to it here. The image masks
+# getty@tty1 (no login prompt, ever, on the card's own screen), so a run that fails does NOT hand the screen
+# back to tty1: it stays on tty8 with the reason on it (hold_screen). give_tty_back is only for the runs that
+# end because there is nothing to do - the launcher owns tty1 then.
 show_our_tty() {
+    # the boot splash: hand the screen over, keeping its last frame under our first drawing (no flash of
+    # console between the logo and the setup screen). Nothing runs when plymouth is not there or already gone.
+    if command -v plymouth >/dev/null 2>&1 && plymouth --ping >/dev/null 2>&1; then
+        plymouth quit --retain-splash >/dev/null 2>&1 || true
+    fi
     chvt 8 >/dev/null 2>&1 || true
 }
 give_tty_back() {
     chvt 1 >/dev/null 2>&1 || true
+}
+# The run is over for this boot and the screen keeps what it shows: the message stays readable until the user
+# switches the power off (the next boot tries again) or logs in with ssh. The unit stays "running" - nothing
+# waits for it, and a reboot or power-off ends it.
+hold_screen() {
+    while :; do sleep 3600; done
 }
 
 # the screen's program leaves tty8 in graphics mode (the success path reboots from the picture) or, in
@@ -251,15 +265,13 @@ choose_ui_mode() {
     ui_available || UI_MODE=plain
 }
 
-# a run that ends here without a reboot: the reason on the screen, the bare console and tty1 back, and
-# the next boot tries again
+# a run that ends here without a reboot: the reason on the screen - and it STAYS there, no login prompt takes
+# its place (the image has none on tty1) - and the next boot tries again
 bail() {
     local title="$1"; shift
-    ui_message "$title" "$@" "It will try again on the next boot." \
-        "The details are in $INSTALL_LOG (log in on another console)." --wait 8
-    text_mode
-    give_tty_back
-    exit 1
+    ui_message "$title" "$@" "It will try again on the next boot - switch the power off and on." \
+        "The details are in $INSTALL_LOG (ssh in, or Alt+F2 for a login)."
+    hold_screen
 }
 
 # best-effort note in System/Logs, once the data partition exists to hold one
@@ -334,6 +346,9 @@ install_args() {
     v="${OPT[downloads]:-yes}"
     if [ "${OPT[retroarch]:-}" = none ]; then v=no; fi
     case "$v" in no|false|0) args+=(--no-downloads) ;; esac
+    # RetroArch and its cores/assets, when the image carries them (tools/make_rpi_image.sh): unpacked from
+    # there, nothing downloaded
+    [ -d "$OFFLINE_DIR" ] && args+=(--offline "$OFFLINE_DIR")
     printf '%s\n' "${args[@]}"
 }
 
@@ -552,8 +567,9 @@ if [ "$attempts" -gt "$MAX_ATTEMPTS" ]; then
     warn "gave up after $((attempts - 1)) attempts - run install.sh by hand"
     note_in_data_logs "autobleem-firstboot gave up after $((attempts - 1)) attempts. Run install.sh by hand: sudo bash $UNPACK_DIR/install.sh --yes (re-extract $PACKAGE first if $UNPACK_DIR is gone)"
     disarm
-    give_tty_back
-    exit 0
+    ui_message "Setup gave up" "AutoBleem's setup failed $((attempts - 1)) times in a row." \
+        "Run install.sh by hand: see $INSTALL_LOG (ssh in, or Alt+F2 for a login)."
+    hold_screen
 fi
 log "attempt $attempts of $MAX_ATTEMPTS"
 
@@ -634,10 +650,8 @@ if [ ! -f "$INSTALLER" ]; then
     note_in_data_logs "autobleem-firstboot: no install.sh under $UNPACK_DIR after extracting $PACKAGE - package layout unexpected"
     disarm
     ui_message "Setup failed" "No install.sh in $(basename "$PACKAGE") - the package is not laid out as expected." \
-        "AutoBleem's setup gives up; run install.sh by hand." --wait 8
-    text_mode
-    give_tty_back
-    exit 1
+        "AutoBleem's setup gives up; run install.sh by hand."
+    hold_screen
 fi
 
 mapfile -t ARGS < <(install_args)
@@ -667,7 +681,7 @@ if run_installer; then
     rm -f "$ATTEMPTS_FILE"
     disarm
     # the staged tarball/tree already did their job (install.sh copied everything onto the data partition)
-    rm -rf "$UNPACK_DIR" "$PACKAGE"
+    rm -rf "$UNPACK_DIR" "$PACKAGE" "$OFFLINE_DIR"
     log "Rebooting to finish - the HDMI mode and boot splash only take full effect on the next boot"
     sleep 3
     # install.sh mounted the data partition itself, so it is handed back clean here: the first 64-bit
