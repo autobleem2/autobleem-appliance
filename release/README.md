@@ -15,6 +15,26 @@ Plain ini: `[section]` lines, `key = value` lines, `#` comment lines (never afte
 | `[emunxt]`, `[emu]` | `repo`, `commit`, `describe` | `describe` must be in the emulator binary - or, when it is an untagged `<tag>-<n>-g<commit>`, the release's own version (the promote tags that commit after the lock is written) |
 | `[ext_store]`, `[pscbios]` | `repo`, `commit`, `version` | `version` = the extension's `extension.ini` |
 
+## Site packs (`[pack.<name>]`, PLATFORM-23 part 7)
+
+The files the site hosts are pinned by name and hash, one section each, same ini format:
+
+```
+[pack.psc-installer-full]
+file = AutoBleemInstaller-<v>-full.zip
+version = <v>
+sha256 = <64 hex>
+```
+
+Names in use: `psc-installer-full` (`AutoBleemInstaller-<v>-full.zip`), `psc-stick-base` / `psc-stick-full`
+(`autobleem-psc-<v>-base.zip` / `-full.zip`), `rpi-image-armhf` / `rpi-image-arm64` (`autobleem-<v>-rpi-<arch>.img.xz`),
+`retroarch-psc` (`retroarch-psc-<tag>.zip`) and `cores-psc` (`cores-psc-<date>.tar.gz`). `check_release.sh` FAILs a pinned
+pack that is not in any `<dist-dir>` (searched two levels deep) or whose sha256 differs, and a section without `file` or
+a 64-hex `sha256`. **BIOS is never in the lock** (nothing for BIOS is hosted by us): a pack whose file name says `bios`
+is a lock error. A lock without `[pack.*]` sections (v2.0.0-alpha1) checks no packs. The hashes are written when the
+release is promoted, from the built files (`sha256sum`); the full chain stays RELEASE-11. Tests:
+`tests/test_check_release_packs.py`.
+
 ## Running it
 
 ```
