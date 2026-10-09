@@ -422,6 +422,8 @@ class Screen:
         self.percent = None
         self.percent_label = ""             # the file the percentage belongs to, when the output names it
         self.percent_at = time.monotonic()
+        self.detail = ""                    # "n/total files - speed - done of sum MB" on bar 2's label line
+        self.detail_marked = False          # set by an @@detail marker: the generic fallback then keeps out
         self.lines = []
         self.transient = None
         self.done = False
@@ -532,7 +534,14 @@ class Screen:
             label = self.percent_label
         else:
             label = "working..."
-        c.text(x0, y, label[:max_chars - 8], self.small, DIM, BG)
+        label_room = max_chars - 8
+        detail = self.detail[:max_chars - 16] if self.detail and not self.done else ""
+        detail_x = x0 + (bw - len(detail) * sw) // 2
+        if detail:
+            label_room = min(label_room, max(0, (detail_x - x0) // sw - 2))     # the name gives way to the detail
+        c.text(x0, y, shorten(label, label_room), self.small, DIM, BG)
+        if detail:
+            c.text(detail_x, y, detail, self.small, INK, BG)
         if self.percent is not None:
             pct = "%d%%" % self.percent
             c.text(x0 + bw - len(pct) * sw, y, pct, self.small, CYAN, BG)
@@ -573,6 +582,33 @@ class Screen:
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 PHASE = re.compile(r"^@@phase (\d+)/(\d+) (.*)$")
 PERCENT = re.compile(r"(?<![\d.])(\d{1,3})%")
+DETAIL = re.compile(r"^@@detail (.*)$")
+COUNT = re.compile(r"\[\s*(\d+)/\s*(\d+)\]")                    # "[ 12/694]" of the counters
+SPEED = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*([KMG])B?/s")  # wget's "12.3MB/s", "512K/s"
+
+
+def shorten(name, room):
+    """name cut to room characters, with ".." in the middle of a long one so the extension survives."""
+    if room <= 0:
+        return ""
+    if len(name) <= room:
+        return name
+    if room < 8:
+        return name[:room]
+    head = (room - 2) // 2
+    return name[:head] + ".." + name[len(name) - (room - 2 - head):]
+
+
+def fallback_detail(text):
+    """The detail a step's ordinary output carries by itself: "n/total files" and/or wget's speed."""
+    parts = []
+    m = COUNT.search(text)
+    if m:
+        parts.append("%d/%d files" % (int(m.group(1)), int(m.group(2))))
+    m = SPEED.search(text)
+    if m:
+        parts.append("%s %sB/s" % (m.group(1), m.group(2)))
+    return " - ".join(parts)
 
 
 def feed(screen, chunk, ends_with_cr):
@@ -584,8 +620,17 @@ def feed(screen, chunk, ends_with_cr):
         screen.phase_index, screen.phase_count, screen.phase = int(m.group(1)), int(m.group(2)), m.group(3)
         screen.percent = None
         screen.percent_label = ""
+        screen.detail, screen.detail_marked = "", False
         screen.transient = None
         return
+    m = DETAIL.match(text)
+    if m:
+        screen.detail, screen.detail_marked = m.group(1).strip(), True
+        return
+    if not screen.detail_marked:
+        found = fallback_detail(text)
+        if found:
+            screen.detail = found
     pct = PERCENT.findall(text)
     if pct:
         screen.percent = min(100, int(pct[-1]))
@@ -917,7 +962,11 @@ class TextBackend:
         ty += 1
         self.bar(ix, ty, iw, s.phase_permille(), "%d%%" % (s.phase_permille() // 10))
         ty += 4
-        self.put(ix, ty, "This step" if s.percent is not None else "This step - working...", WINDOW)
+        step = "This step" if s.percent is not None else "This step - working..."
+        self.put(ix, ty, step, WINDOW)
+        if s.detail and not s.done:
+            detail = s.detail[:max(0, iw - len(step) - 4)]
+            self.put(ix + max(len(step) + 2, (iw - len(detail)) // 2), ty, detail, WINDOW)
         if s.percent is not None:
             self.bar(ix, ty + 1, iw, s.percent * 10, "%d%%" % s.percent)
         else:
