@@ -740,6 +740,9 @@ inject_payload() {
     # no login prompt on tty1, before or after the first boot: the launcher owns that screen, and a first boot that
     # failed keeps its message on tty8 (autobleem-firstboot.sh) - tty2..6 still have a login (Alt+F2)
     ln -sf /dev/null "$ROOT_MNT/etc/systemd/system/getty@tty1.service"
+    # the user wizard is masked: write_first_user_files makes the account with cloud-init, and the wizard would only
+    # rename it to itself and restart for ever ("usermod: no changes")
+    ln -sf /dev/null "$ROOT_MNT/etc/systemd/system/userconfig.service"
     mkdir -p "$ROOT_MNT/etc/systemd/system/userconfig.service.d"
     install -m 0644 "$REPO_DIR/payload_linux/system/autobleem-userconfig.conf" \
         "$ROOT_MNT/etc/systemd/system/userconfig.service.d/autobleem.conf"
@@ -783,6 +786,8 @@ inject_payload_rootless() {
     # no login prompt on tty1 (see inject_payload), and the user-creation wizard waits for the splash to be gone
     dfs "rm /etc/systemd/system/getty@tty1.service" >/dev/null
     dfs "symlink /etc/systemd/system/getty@tty1.service /dev/null"
+    dfs "rm /etc/systemd/system/userconfig.service" >/dev/null
+    dfs "symlink /etc/systemd/system/userconfig.service /dev/null"
     dfs "mkdir /etc/systemd/system/userconfig.service.d"
     put "$REPO_DIR/payload_linux/system/autobleem-userconfig.conf" /etc/systemd/system/userconfig.service.d/autobleem.conf 0100644
     # RetroArch and the cores, for install.sh --offline (only on a pre-installed image: its root has the room)
@@ -811,22 +816,22 @@ inject_payload_rootless() {
 #*******************************
 # write_first_user_files
 #*******************************
-# The base image has no user (uid 1000) and its user wizard (userconfig.service -> userconf-pi, on tty8) is
-# interactive unless the boot partition carries userconf.txt: it then asks for the keyboard and a user, and with no
-# uid 1000 to rename it loops on "Which user would you like to rename" forever (the owner's Pi 400, 2026-10-09; a
-# card written with a plain writer has no Imager customisation to avoid it). So the image answers it itself, with the
-# two files the base image's own mechanisms read: userconf.txt ("name:sha512-hash" - the wizard goes non-interactive
-# and only sets the password) and user-data (cloud-init creates the account with sudo, and sets the keyboard and the
-# locale). Raspberry Pi Imager's customisation, when used, replaces user-data as it always did. $1 = the directory.
+# The base image has no user (uid 1000) and its user wizard (userconfig.service -> userconf-pi, on tty8) asks for a
+# keyboard and a user on the screen, and with no uid 1000 to rename it loops on "Which user would you like to rename"
+# forever (the owner's Pi 400, 2026-10-09; a card written with a plain writer has no Imager customisation to avoid
+# it). Answering it with a userconf.txt does not work either: cloud-init has created the account by then, the wizard
+# "renames" it to the same name and `usermod: no changes` makes the service fail and restart for ever (same day).
+# So the image creates the user itself with cloud-init (user-data: the account with sudo, the keyboard, the locale)
+# and masks the wizard (inject_payload). Raspberry Pi Imager's customisation, when used, replaces user-data as it
+# always did, and needs no wizard either. $1 = the directory.
 write_first_user_files() {
     local dir="$1" hash
-    printf '%s' "$FIRST_USER" | grep -Eq '^[a-z][a-z0-9-]{0,31}$'         || die "--user '$FIRST_USER' is not a valid account name (lower-case letters, digits, hyphens; starts with a letter)"
+    printf '%s' "$FIRST_USER" | grep -Eq '^[a-z][a-z0-9-]{0,31}$' \
+        || die "--user '$FIRST_USER' is not a valid account name (lower-case letters, digits, hyphens; starts with a letter)"
     [ "$FIRST_USER" != root ] || die "--user cannot be root"
     [ -n "$FIRST_PASS" ] || die "--password cannot be empty"
     command -v openssl >/dev/null 2>&1 || die "missing required tool: openssl (the password hash)"
     hash="$(openssl passwd -6 -salt "$(openssl rand -hex 8)" "$FIRST_PASS")" || die "openssl passwd failed"
-    printf '%s:%s
-' "$FIRST_USER" "$hash" >"$dir/userconf.txt"
     cat >"$dir/user-data" <<UDEOF
 #cloud-config
 # Written by tools/make_rpi_image.sh: the first user, the keyboard and the locale, so the first boot asks nothing.
@@ -855,11 +860,11 @@ UDEOF
 # (/usr/share/initramfs-tools/scripts/local-premount/resize_early, and set_partuuid next to it), and a
 # root that fills the card leaves install.sh no room for the exFAT data partition - instead install.sh
 # grows the root to a bounded size itself (--grow-root, from autobleem.txt's root_gib) and takes the rest.
-# Plus the first user (write_first_user_files: userconf.txt + user-data). network-config/meta-data stay as the base
+# Plus the first user (write_first_user_files: user-data). network-config/meta-data stay as the base
 # image ships them; Raspberry Pi Imager's OS customisation, when used, still replaces user-data.
 inject_boot_files() {
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '    would drop "resize" from cmdline.txt and add autobleem.txt + ssh + userconf.txt + user-data on the boot partition\n'
+        printf '    would drop "resize" from cmdline.txt and add autobleem.txt + ssh + user-data on the boot partition\n'
         return 0
     fi
     if [ "$PREINSTALLED" -eq 1 ]; then
@@ -903,8 +908,8 @@ inject_boot_files() {
         : >"$WORK_DIR/ssh"
         mcopy -o -i "$RAW_IMG@@$BOOT_OFF" "$WORK_DIR/ssh" ::ssh || die "writing ssh failed"
         write_first_user_files "$WORK_DIR"
-        mcopy -o -i "$RAW_IMG@@$BOOT_OFF" "$WORK_DIR/userconf.txt" "$WORK_DIR/user-data" ::             || die "writing userconf.txt/user-data failed"
-        rm -f "$WORK_DIR/userconf.txt" "$WORK_DIR/user-data"
+        mcopy -o -i "$RAW_IMG@@$BOOT_OFF" "$WORK_DIR/user-data" ::user-data || die "writing user-data failed"
+        rm -f "$WORK_DIR/user-data"
         if [ "$PREINSTALLED" -eq 1 ]; then
             # no rainbow square from the firmware (config.txt's business, not the kernel's)
             mcopy -o -i "$RAW_IMG@@$BOOT_OFF" ::config.txt "$WORK_DIR/config.txt" || die "no config.txt on the boot partition"
@@ -918,7 +923,7 @@ inject_boot_files() {
             rm -f "$WORK_DIR/config.txt"
         fi
         rm -f "$cmdline" "$WORK_DIR/ssh"
-        mdir -i "$RAW_IMG@@$BOOT_OFF" ::autobleem.txt ::cmdline.txt ::ssh ::userconf.txt ::user-data | grep -iE "autobleem|cmdline|ssh|userconf|user-data" | sed 's/^/    /'
+        mdir -i "$RAW_IMG@@$BOOT_OFF" ::autobleem.txt ::cmdline.txt ::ssh ::user-data | grep -iE "autobleem|cmdline|ssh|user-data" | sed 's/^/    /'
     else
         install -m 0644 "$REPO_DIR/payload_linux/system/autobleem.txt" "$BOOT_MNT/autobleem.txt"
         : >"$BOOT_MNT/ssh"

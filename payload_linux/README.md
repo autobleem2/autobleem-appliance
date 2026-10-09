@@ -140,9 +140,9 @@ own with `--base`) and injects an AutoBleem package plus a first-boot service. O
 `cmdline.txt` loses the word `resize` (see "The data partition" - this is what keeps the root from swallowing
 the whole card), and `autobleem.txt` is added. The base image has no user and its user wizard would ask for a keyboard and a
 user on the screen (looping, with nothing to rename) on a card written without Imager customisation, so the image
-answers it: `userconf.txt` and a `user-data` create the account `autobleem` (password `autobleem`, sudo; change it
-with `--user`/`--password` at build time or `passwd` after login) with keyboard `gb` and locale `en_GB.UTF-8`.
-`network-config` stays as shipped, and Raspberry Pi Imager's OS customisation, when used, replaces `user-data`.
+creates the account itself: a `user-data` makes `autobleem` (password `autobleem`, sudo; change it with
+`--user`/`--password` at build time or `passwd` after login) with keyboard `gb` and locale `en_GB.UTF-8`, and the
+wizard (`userconfig.service`) is masked. `network-config` stays as shipped, and Raspberry Pi Imager's OS customisation, when used, replaces `user-data`.
 
 **The pre-install (PLATFORM-23).** With `proot` (5.5.0 or newer) and `qemu-user-static` available and the build
 running as root in `--rootless` mode (what the build container is), the image's root is also worked on at build
