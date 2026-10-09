@@ -2,7 +2,9 @@
 Description=AutoBleem launcher
 # the launcher is useless before its games partition is there, and it owns tty1 instead of a login prompt
 RequiresMountsFor=@DATA_MOUNT@
-After=systemd-user-sessions.service sound.target plymouth-start.service plymouth-quit.service
+# ordered after udev's device trigger (the display and input devices), not after systemd-user-sessions or any
+# network target: the launcher menu must not wait for logins or for the network
+After=systemd-udev-trigger.service sound.target plymouth-start.service plymouth-quit.service
 # plymouth-quit.service would take the boot splash down (and put the text console back) as soon as the
 # system is up, a second or two before the launcher has the display. Keeping it out of the boot lets
 # autobleem-session quit plymouth itself, right before starting the launcher and with the logo left on
