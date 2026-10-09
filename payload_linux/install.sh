@@ -1136,6 +1136,37 @@ bios_fetch_one() {
 }
 
 #*******************************
+# bios_detail_loop
+#*******************************
+# bios_detail_loop <entries file> <results file> <total>
+# Once a second prints "@@detail <n>/<total> files - <x.y> MB/s - <done> of <sum> MB" for the installer screen:
+# sum = the sizes (field 2) of the manifest entries, done = the sizes of the finished files (OK/KEPT lines of the
+# results file) plus the *.part files under $RA_ROOT/system, speed = the bytes gained over the last ~5 samples.
+# The leading "\r" ends whatever progress line the counter left open, so the marker is a line of its own.
+# Started in the background by download_bios_pack (only with AB_UI_MARKERS=1) and killed when the step ends.
+bios_detail_loop() {
+    local entries_file="$1" results="$2" total="$3" sum n finished parts done_b i
+    local -a hist=()
+    sum="$(awk '{ s += $2 } END { printf "%d", s }' "$entries_file")"
+    while :; do
+        n="$(grep -c -E '^(OK|KEPT) ' "$results" 2>/dev/null || true)"
+        finished="$(awk 'NR == FNR { p = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ /, "", p); sz[p] = $2; next }
+                         $1 == "OK" || $1 == "KEPT" { s += sz[substr($0, index($0, " ") + 1)] }
+                         END { printf "%d", s }' "$entries_file" "$results" 2>/dev/null || true)"
+        parts="$(find "$RA_ROOT/system" -name '*.part' -printf '%s\n' 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }')"
+        done_b=$(( ${finished:-0} + ${parts:-0} ))
+        hist+=("$done_b")
+        [ "${#hist[@]}" -le 6 ] || hist=("${hist[@]:1}")
+        i=$(( ${#hist[@]} - 1 ))
+        awk -v n="${n:-0}" -v total="$total" -v done="$done_b" -v sum="$sum" -v old="${hist[0]}" -v secs="$i" 'BEGIN {
+            speed = secs > 0 ? (done - old) / secs / 1048576 : 0
+            if (speed < 0) speed = 0
+            printf "\r@@detail %d/%d files - %.1f MB/s - %d of %d MB\n", n, total, speed, done / 1048576, sum / 1048576 }'
+        sleep 1
+    done
+}
+
+#*******************************
 # download_bios_pack
 #*******************************
 # The BIOS files the cores need, into RetroArch/system/. system/biospack.txt (armhf) or
@@ -1187,10 +1218,24 @@ download_bios_pack() {
     results="$(mktemp /tmp/autobleem-bios.XXXXXX)"
     export RA_ROOT
     export -f bios_fetch_one
+    # on the installer screen (AB_UI_MARKERS=1) a 1 s background loop adds "@@detail" lines: files, speed, MB; a
+    # terminal run never starts it
+    local detail_pid="" entries_file=""
+    if [ "${AB_UI_MARKERS:-0}" = 1 ]; then
+        entries_file="$(mktemp /tmp/autobleem-bios-entries.XXXXXX)"
+        printf '%s\n' "$entries" >"$entries_file"
+        bios_detail_loop "$entries_file" "$results" "$total" &
+        detail_pid=$!
+    fi
     printf '%s\n' "$entries" | xargs -d '\n' -P 4 -I{} bash -c 'bios_fetch_one "$1"' _ {} \
         | tee "$results" \
         | awk -v total="$total" '{ n++; printf "\r    [%3d/%3d] %3d%% %-50.50s", n, total, n * 100 / total, substr($0, index($0, " ") + 1); fflush() }
                                  END { printf "\n" }'
+    if [ -n "$detail_pid" ]; then
+        kill "$detail_pid" 2>/dev/null || true
+        wait "$detail_pid" 2>/dev/null || true
+        rm -f "$entries_file"
+    fi
     local fetched kept failed
     fetched="$(grep -c '^OK ' "$results" || true)"
     kept="$(grep -c '^KEPT ' "$results" || true)"
