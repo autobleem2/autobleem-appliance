@@ -532,6 +532,86 @@ ensure_network() {
 }
 
 #*******************************
+# faster later boots
+#*******************************
+# Called once install.sh has succeeded, just before the reboot. Ordinary boots after this one should reach the
+# launcher without cloud-init's stages and without netplan regenerating the NetworkManager profiles:
+#  - /etc/cloud/cloud-init.disabled stops cloud-init (its work, Imager's customisation, is done);
+#  - the WiFi/ethernet profiles netplan generated under /run/NetworkManager/system-connections (tmpfs, gone at
+#    each boot) are copied to /etc/NetworkManager/system-connections (mode 600, root), each read back with
+#    cmp, and only when every copy is verified are /etc/netplan/*.yaml moved to /etc/netplan.autobleem-off/.
+# Any failure, or no generated profile at all (ethernet only, where netplan's default is fine), leaves netplan
+# untouched and removes the copies, so the next boot is exactly what it was before.
+# UNDO: rm /etc/cloud/cloud-init.disabled; mv /etc/netplan.autobleem-off/*.yaml /etc/netplan/;
+#       delete the copied profiles from /etc/NetworkManager/system-connections (the ones with the same
+#       names as the netplan-generated "netplan-*.nmconnection" files); reboot.
+slim_later_boots() {
+    local src=/run/NetworkManager/system-connections
+    local dst=/etc/NetworkManager/system-connections
+    local off=/etc/netplan.autobleem-off
+    local f name ok=1
+    local -a copied=() yamls=()
+
+    mkdir -p /etc/cloud 2>/dev/null && touch /etc/cloud/cloud-init.disabled 2>/dev/null \
+        && logger -t autobleem-firstboot -- "cloud-init disabled" \
+        || logger -t autobleem-firstboot -p user.warning -- "could not create /etc/cloud/cloud-init.disabled"
+
+    shopt -s nullglob
+    local -a profiles=("$src"/*.nmconnection)
+    yamls=(/etc/netplan/*.yaml)
+    shopt -u nullglob
+
+    if [ ${#profiles[@]} -eq 0 ]; then
+        logger -t autobleem-firstboot -- "no netplan-generated NetworkManager profile (ethernet only) - netplan left as it is"
+        return 0
+    fi
+    if [ ${#yamls[@]} -eq 0 ]; then
+        logger -t autobleem-firstboot -- "no /etc/netplan/*.yaml - netplan left as it is"
+        return 0
+    fi
+
+    mkdir -p "$dst" 2>/dev/null || ok=0
+    if [ "$ok" = 1 ]; then
+        for f in "${profiles[@]}"; do
+            name="$(basename "$f")"
+            if install -o root -g root -m 600 "$f" "$dst/$name" 2>/dev/null && cmp -s "$f" "$dst/$name"; then
+                copied+=("$dst/$name")
+            else
+                ok=0
+                rm -f "$dst/$name" 2>/dev/null || true
+                logger -t autobleem-firstboot -p user.warning -- "could not copy $name to $dst"
+                break
+            fi
+        done
+    fi
+    if [ "$ok" = 1 ]; then
+        mkdir -p "$off" 2>/dev/null || ok=0
+    fi
+    if [ "$ok" = 1 ]; then
+        for f in "${yamls[@]}"; do
+            if ! mv "$f" "$off/" 2>/dev/null; then
+                ok=0
+                logger -t autobleem-firstboot -p user.warning -- "could not move $f to $off"
+                break
+            fi
+        done
+        if [ "$ok" = 0 ]; then
+            # put back whatever was moved
+            for f in "$off"/*.yaml; do
+                [ -e "$f" ] && mv "$f" /etc/netplan/ 2>/dev/null || true
+            done
+        fi
+    fi
+    if [ "$ok" = 1 ]; then
+        logger -t autobleem-firstboot -- "netplan moved to $off, ${#copied[@]} NetworkManager profile(s) kept in $dst"
+    else
+        rm -f "${copied[@]}" 2>/dev/null || true
+        logger -t autobleem-firstboot -p user.warning -- "netplan left untouched, copied profiles removed"
+    fi
+    return 0
+}
+
+#*******************************
 # main
 #*******************************
 # an image built from packages (tools/make_pc_image.sh) ships without ssh host keys - every stick would
@@ -682,6 +762,7 @@ if run_installer; then
     disarm
     # the staged tarball/tree already did their job (install.sh copied everything onto the data partition)
     rm -rf "$UNPACK_DIR" "$PACKAGE" "$OFFLINE_DIR"
+    slim_later_boots
     log "Rebooting to finish - the HDMI mode and boot splash only take full effect on the next boot"
     sleep 3
     # install.sh mounted the data partition itself, so it is handed back clean here: the first 64-bit
