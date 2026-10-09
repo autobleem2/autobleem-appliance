@@ -701,6 +701,7 @@ pack_root() {
 inject_payload() {
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '    would copy %s and the firstboot service/script into the image, and enable the service\n' "$PACKAGE"
+        printf '    would write /etc/systemd/journald.conf.d/autobleem-persistent.conf (Storage=persistent) and create /var/log/journal\n'
         return 0
     fi
     log "Injecting the AutoBleem package and first-boot service"
@@ -746,6 +747,12 @@ inject_payload() {
     mkdir -p "$ROOT_MNT/etc/systemd/system/userconfig.service.d"
     install -m 0644 "$REPO_DIR/payload_linux/system/autobleem-userconfig.conf" \
         "$ROOT_MNT/etc/systemd/system/userconfig.service.d/autobleem.conf"
+    # persistent journal from the very first boot (PLATFORM-23: the first boot of 2026-10-09 could not be analysed,
+    # its journal lived in RAM and was gone); /var/log/journal has to exist for Storage=persistent to take
+    # effect before the first flush
+    install -D -m 0644 "$REPO_DIR/payload_linux/system/autobleem-journald.conf" \
+        "$ROOT_MNT/etc/systemd/journald.conf.d/autobleem-persistent.conf"
+    install -d -m 0755 -o root -g root "$ROOT_MNT/var/log/journal"
 }
 
 # the same five writes through debugfs, on the unmounted root filesystem. `write` gives the new file the
@@ -790,6 +797,13 @@ inject_payload_rootless() {
     dfs "symlink /etc/systemd/system/userconfig.service /dev/null"
     dfs "mkdir /etc/systemd/system/userconfig.service.d"
     put "$REPO_DIR/payload_linux/system/autobleem-userconfig.conf" /etc/systemd/system/userconfig.service.d/autobleem.conf 0100644
+    # persistent journal from the first boot (see inject_payload)
+    dfs "mkdir /etc/systemd/journald.conf.d"
+    put "$REPO_DIR/payload_linux/system/autobleem-journald.conf" /etc/systemd/journald.conf.d/autobleem-persistent.conf 0100644
+    dfs "mkdir /var/log/journal"
+    dfs "sif /var/log/journal uid 0"
+    dfs "sif /var/log/journal gid 0"
+    dfs "sif /var/log/journal mode 040755"
     # RetroArch and the cores, for install.sh --offline (only on a pre-installed image: its root has the room)
     if [ ${#OFFLINE_FILES[@]} -gt 0 ]; then
         dfs "mkdir /opt/autobleem-image/offline"
