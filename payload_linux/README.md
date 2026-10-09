@@ -434,6 +434,19 @@ firmware's rainbow square is turned off in `config.txt` (`disable_splash=1`). `-
 `--no-boot-splash` and `--no-quiet-boot` on the installer undo each of these; `--no-boot-config` leaves the
 boot files alone altogether.
 
+### Case buttons and status LED (a Pi)
+
+For the ABleemStation case (wiring: github.com/autobleem2/ableemstation). `/etc/autobleem/gpio.conf` is the
+pin map (created once, never overwritten): `POWER_GPIO=3` (pin 5 to GND) is `dtoverlay=gpio-shutdown` — a press
+powers off cleanly and the same press wakes the Pi from halt; `RESET_GPIO=23` (pin 16 to GND) is a
+`dtoverlay=gpio-key` sending KEY_PLAYPAUSE, what the console's Reset sends. `LED_TYPE=plain` is GPIO14/TXD with
+`enable_uart=1`; `LED_TYPE=pixel` is one WS2812B on GPIO10 (pin 19) with `dtparam=spi=on`, green when the
+launcher starts and orange while powering off (`autobleem-gpio.service`, `autobleem-gpio-poweroff.service`;
+`autobleem-gpio red` is a free error colour). The pixel needs SPI at ~2.4 MHz: install `spi-tools` so the
+helper can set it, and on a Pi 3/4 whose colours flicker pin the core clock (`core_freq_min=500` / `core_freq=250`).
+Edit `gpio.conf`, run `install.sh --update`, reboot. Nothing wired = nothing happens. `--no-boot-config`
+skips the `config.txt` block (between `# AutoBleem GPIO begin` / `end`).
+
 If a card set up before 2026-09-18 shows the stock plymouth theme on another Pi, `sudo update-initramfs -u
 -k all` packs the AutoBleem theme into the other kernels' images too.
 

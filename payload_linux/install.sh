@@ -1720,7 +1720,7 @@ install_boot_splash() {
 configure_boot() {
     [ "$DO_BOOT_CONFIG" -eq 1 ] || { log "skipping boot config (--no-boot-config)"; return 0; }
     case "$PLATFORM" in
-        rpi)   configure_boot_rpi ;;
+        rpi)   configure_boot_rpi; configure_gpio_boot ;;
         pcusb) configure_boot_pcusb ;;
     esac
 }
@@ -1839,6 +1839,78 @@ configure_boot_rpi() {
 }
 
 #*******************************
+# install_gpio
+#*******************************
+# AUTOBLEEM-4, the case's POWER / RESET buttons and status LED (a Pi only). The buttons are device-tree
+# overlays (configure_gpio_boot, below) and need no software; this installs the pin map (only when absent,
+# so edits survive --update), the pixel LED helper and its two units. The units run nothing unless the pin
+# map says LED_TYPE=pixel. Never fatal: the appliance boots the same without any of it.
+install_gpio() {
+    [ "$PLATFORM" = rpi ] || return 0
+    local confdir="${AB_GPIO_CONF_DIR:-/etc/autobleem}" unitdir="${AB_GPIO_UNIT_DIR:-/etc/systemd/system}"
+    log "Installing the GPIO button/LED support"
+    run install -d -m 0755 "$confdir"
+    if [ -f "$confdir/gpio.conf" ]; then
+        log "$confdir/gpio.conf exists - kept"
+    else
+        run install -m 0644 "$SCRIPT_DIR/system/gpio.conf" "$confdir/gpio.conf"
+    fi
+    run install -m 0755 "$SCRIPT_DIR/system/autobleem-gpio.sh" "${AB_GPIO_BIN:-/usr/local/bin/autobleem-gpio}"
+    run install -m 0644 "$SCRIPT_DIR/system/autobleem-gpio.service" "$unitdir/autobleem-gpio.service"
+    run install -m 0644 "$SCRIPT_DIR/system/autobleem-gpio-poweroff.service" "$unitdir/autobleem-gpio-poweroff.service"
+    if [ -z "${AB_GPIO_UNIT_DIR:-}" ]; then
+        run systemctl daemon-reload || true
+        run systemctl enable autobleem-gpio.service autobleem-gpio-poweroff.service || true
+    fi
+}
+
+#*******************************
+# configure_gpio_boot
+#*******************************
+# The AutoBleem block in config.txt, between two marker lines so a re-run replaces it rather than stacking
+# a second one (and so an edit of gpio.conf takes effect on --update):
+#   POWER  dtoverlay=gpio-shutdown: a press is a clean poweroff, and the same press wakes the Pi from halt
+#   RESET  dtoverlay=gpio-key: KEY_PLAYPAUSE (164), what the console's Reset sends; the pull-up holds the pin
+#   plain LED: enable_uart=1 (GPIO14/TXD idles high)    pixel LED: dtparam=spi=on
+# Overlays only register input devices, so an unwired Pi sees nothing. Honours --no-boot-config (the caller).
+# The pin map is read from $AB_GPIO_CONF_DIR/gpio.conf; absent (a dry run before install_gpio) = the defaults.
+configure_gpio_boot() {
+    [ "$PLATFORM" = rpi ] || return 0
+    local cfg="$BOOT_DIR/config.txt" conf="${AB_GPIO_CONF_DIR:-/etc/autobleem}/gpio.conf"
+    [ -f "$cfg" ] || return 0
+    local POWER_GPIO=3 RESET_GPIO=23 LED_TYPE=none
+    # shellcheck source=/dev/null
+    [ -f "$conf" ] && . "$conf"
+    local begin="# AutoBleem GPIO begin" end="# AutoBleem GPIO end" block old
+    block="$begin
+[all]
+# AutoBleem: POWER button (GPIO$POWER_GPIO to GND) = clean poweroff, and wakes the Pi from halt
+dtoverlay=gpio-shutdown,gpio_pin=$POWER_GPIO,active_low=1,gpio_pull=up
+# AutoBleem: RESET button (GPIO$RESET_GPIO to GND) = KEY_PLAYPAUSE"
+    block="$block
+dtoverlay=gpio-key,gpio=$RESET_GPIO,active_low=1,gpio_pull=up,keycode=164"
+    case "$LED_TYPE" in
+        plain) block="$block
+# AutoBleem: plain LED on GPIO14/TXD
+enable_uart=1" ;;
+        pixel) block="$block
+# AutoBleem: RGB pixel on GPIO10 (SPI0 MOSI); if its colours flicker see autobleem-gpio for core_freq_min
+dtparam=spi=on" ;;
+    esac
+    block="$block
+$end"
+    old="$(sed -n "/^$begin\$/,/^$end\$/p" "$cfg")"
+    if [ "$old" = "$block" ]; then
+        log "$cfg: the AutoBleem GPIO block is up to date"
+        return 0
+    fi
+    log "Configuring $cfg (power/reset buttons, LED: $LED_TYPE)"
+    run cp -n "$cfg" "$cfg.autobleem-backup"
+    { awk -v b="$begin" -v e="$end" '$0 == b { skip = 1; next } skip && $0 == e { skip = 0; next } !skip' "$cfg"
+      printf '\n%s\n' "$block"; } | write_file "$cfg"
+}
+
+#*******************************
 # unblock_bluetooth
 #*******************************
 # TOOLS-10, part (b): the owner's Pi 400 had Bluetooth soft-blocked by rfkill, and systemd-rfkill restores
@@ -1953,6 +2025,7 @@ main() {
     install_sample_games
     phase 9 "Boot setup"
     install_service
+    install_gpio
     install_boot_splash
     configure_boot
     unblock_bluetooth
