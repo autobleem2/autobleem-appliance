@@ -16,7 +16,7 @@ Wants=network-online.target
 # plymouth-start: the image carries the boot splash (PLATFORM-23); the script ends it with `plymouth quit
 # --retain-splash` before switching to tty8, so the logo stays under the setup screen's first frame. Ordered
 # after plymouth-start only - NOT before plymouth-quit.service: multi-user.target is After= its wants, and this
-# unit is After= multi-user.target, so a Before=plymouth-quit would be a dependency cycle.
+# unit is ordered after multi-user.target, so ordering it before plymouth-quit would be a dependency cycle.
 # The first boot is watched and answered on the screen. It runs on its own virtual terminal, tty8 - the
 # same way Raspberry Pi OS's own user-creation wizard (userconfig.service) does - and the script switches
 # the screen to it (chvt); a run that fails keeps its message there (the image has no login prompt on tty1). Not tty1 with
