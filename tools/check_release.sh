@@ -6,6 +6,7 @@
 # autobleem-win-product-*.zip, autobleem-win-*.zip, AutoBleemSetup-*.exe, autobleem-{rpi,rpi-arm64,pcusb}-*.tar.gz,
 # ext_store-<target>-*.zip, console-tools-<target>-*.tar.gz. Everything is unpacked to a temp folder and read, never
 # changed. One PASS / FAIL / SKIP line per check; exit 1 when any check FAILs. Needs bash 4, unzip, tar, grep, awk.
+# Site packs: every [pack.<name>] section (file, sha256) must be found in a DIST and hash to sha256 (release/README.md).
 # Format of the lock and what each check can and cannot see: release/README.md.
 set -uo pipefail
 LOCK="${1:-}"; shift || true
@@ -46,7 +47,8 @@ check_version_text() {
     fi
 }
 
-declare -A LSTAMP   # target -> the launcher's SDK stamp, for the extension checks
+declare -A FOUND    # file name -> first path found in the DIST folders, for the pack checks
+declare -A LSTAMP  # target -> the launcher's SDK stamp, for the extension checks
 T_LABEL=(); T_TARGET=(); T_DIR=(); T_REQ_EMU=()
 # add_tree LABEL TARGET DIR REQUIRE_EMULATORS(0|1)
 add_tree() {
@@ -91,7 +93,24 @@ for dist in "$@"; do
             AutoBleemSetup-*.exe) t="${b#AutoBleemSetup-}"; check_version_text win-installer "file name" "${t%.exe}" ;;
         esac
     done < <(find "$dist" -maxdepth 2 -type f | sort)
+    while IFS= read -r f; do FOUND[$(basename "$f")]="${FOUND[$(basename "$f")]:-$f}"; done < <(find "$dist" -maxdepth 2 -type f | sort)
 done
+
+# check_packs - every [pack.<name>] of the lock (file, sha256): the file must be in a DIST and hash to sha256.
+# A lock without pack sections checks nothing here. Nothing for BIOS is hosted by us, so a BIOS pack is a lock error.
+check_packs() {
+    local sec name file want got
+    while IFS= read -r sec; do
+        name="${sec#pack.}"; file="$(lock "$sec" file)"; want="$(lock "$sec" sha256)"
+        if [ -z "$file" ] || ! [[ "$want" =~ ^[0-9a-f]{64}$ ]]; then fail "pack $name" "lock entry needs file and a 64-hex sha256"; continue; fi
+        if [[ "${file,,}" == *bios* ]]; then fail "pack $name" "$file: BIOS is never in the lock"; continue; fi
+        if [ -z "${FOUND[$file]:-}" ]; then fail "pack $name" "$file is missing from the dist folders"; continue; fi
+        got="$(sha256sum "${FOUND[$file]}" | awk '{print $1}')"
+        if [ "$got" = "$want" ]; then pass "pack $name" "$file sha256 = $want"
+        else fail "pack $name" "$file: sha256 expected $want, got $got"; fi
+    done < <(awk '/^\[pack\.[^]]+\]/ { gsub(/[][]/, ""); print }' "$LOCK")
+}
+check_packs
 
 # check_launcher LABEL TARGET TREE BIN
 check_launcher() {

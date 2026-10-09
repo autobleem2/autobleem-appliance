@@ -111,7 +111,7 @@ before running it, or replace them afterwards — a re-run never overwrites them
 
 `--help` lists the options. The useful ones are `--shrink-root` / `--grow-root` (see "The data partition"),
 `--retroarch`, `--repo` (AutoBleem's download site, for a mirror or a copy on your own network),
-`--no-downloads`, `--no-bios`, `--no-samples`, `--no-packages`, `--stage`, `--hdmi-mode` (default
+`--no-downloads`, `--no-bios`, `--ps1-bios-only` (of the BIOS pack only the PlayStation files: scph*.bin, ps1_rom.bin, psxonpsp660.bin), `--no-samples`, `--no-packages`, `--stage`, `--hdmi-mode` (default
 `1920x1080@60`, `1280x720@60` for a 720p screen; `none` keeps the screen's preferred mode), `--no-boot-splash`
 and `--no-quiet-boot`.
 

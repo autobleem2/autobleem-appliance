@@ -8,7 +8,8 @@
 # installer, what a console user downloads - it fetches this tarball from the channel picked in it) and
 # UpdateRoms-<v>.zip (step 5), the first with LastResortRecovery/ inside. Step 6 makes the two zips to unzip
 # straight onto a stick, autobleem-psc-<v>-base.zip (without RetroArch) and -full.zip (with RetroArch and its
-# cores), neither with a BIOS file (tools/psc_zips.py).
+# cores), neither with a BIOS file (tools/psc_zips.py). Step 7 makes AutoBleemInstaller-<v>-full.zip: the same
+# installer with the packs it would download beside it (payload/, tools/psc_bundle.py), still no BIOS file.
 #
 # This tarball is deliberately NOT self-contained: no RetroArch/ and no cover databases
 # (Autobleem/bin/db/), same as the launcher repo's tools/make_psc_package.sh's tarball branch - AutoBleemInstaller.exe
@@ -185,3 +186,21 @@ echo "==> the stick zips (base and full) from $out and $site"
 "$(command -v python3 || command -v python)" "$(dirname "$0")/tools/psc_zips.py" \
     --package "$out" --version "$VERSION" --site "$site" --work-dir "$work" --out-dir .
 ls -l "autobleem-psc-$VERSION-base.zip" "autobleem-psc-$VERSION-full.zip"
+
+# 7. the installer with its own payload (PLATFORM-23, the owner: "launcher with payload and everything RetroArch needs,
+#    apart from the BIOS files, inside"): AutoBleemInstaller-<v>-full.zip = the signed exe and what the online zip
+#    carries, plus payload/ - the packs the exe would fetch from the site (the stick package, RetroArch and its cores,
+#    libs, apps, libretro's bundles, the cover databases, the samples, UpdateRoms) at the paths of their URLs with
+#    bundle.json (size and sha256 of each), the licence files and a source offer. The exe finds payload/ next to
+#    itself and installs from it; only the BIOS files still come over the net, from RetroBIOS. A BIOS file in
+#    any pack fails the build here and again in the workflow (psc_bundle.py --check). The online zip above stays.
+py="$(command -v python3 || command -v python)"
+echo "==> the installer bundle (full) from $out and $site"
+bundle_stage="$work/bundle-stage"
+"$py" "$(dirname "$0")/tools/psc_bundle.py" --package "$out" --version "$VERSION" --site "$site" \
+    --updateroms-dir "$win/UpdateRoms" --work-dir "$work" --out-dir "$bundle_stage"
+full="$work/full"; rm -rf "$full"; mkdir -p "$full"
+cp -a "$win/AutoBleemInstaller" "$full/AutoBleemInstaller"   # the exe, VERSION, the font licence, LastResortRecovery/
+cp -a "$bundle_stage/." "$full/AutoBleemInstaller/"          # payload/, the full README, the notices, VERSION
+"$py" "$(dirname "$0")/tools/psc_bundle.py" --zip-folder "$full" AutoBleemInstaller "AutoBleemInstaller-$VERSION-full.zip"
+ls -l "AutoBleemInstaller-$VERSION-full.zip"
