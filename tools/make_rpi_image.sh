@@ -2,8 +2,8 @@
 #
 # Build a Raspberry Pi Imager-flashable AutoBleem image: an official Raspberry Pi OS Lite image (armhf or
 # arm64) with an AutoBleem package tarball and a first-boot service injected. Raspberry Pi Imager's own OS
-# customisation (hostname, user, WiFi, SSH, locale) keeps working unmodified, because the image's own
-# first-boot mechanism (cloud-init or firstrun.sh, whichever the base image ships) is never touched;
+# customisation (hostname, user, WiFi, SSH, locale) still works (it replaces the user-data written here), and the
+# image's own first-boot mechanism (cloud-init, the user wizard) is left to run - answered by write_first_user_files;
 # autobleem-firstboot.service runs after it, on the first or second boot (see
 # payload_linux/system/autobleem-firstboot.sh), and installs AutoBleem onto the exFAT data partition install.sh
 # creates, exactly as a manual "tar xzf ... && sudo bash install.sh" would.
