@@ -33,9 +33,11 @@
 # v2.0.0-alpha2-5-gabc1234) and published to the site's nightly/<version>/ (the page's "dev" channel; never
 # an update channel). The schedule skips a night on which no component's nightly changed (sources.json in
 # the published folder is the fingerprint it compares). The pieces - each image as it is built, then the
-# packages - are published with repo_publish.sh --partial, which the site's index leaves out; the last job,
-# publish-nightly, publishes sources.json and indexes once every piece is there, and only then does the new
-# build replace the previous nightly (until 2026-09-23 the first image of a run pruned the previous one, PC
+# packages - are staged with repo_publish.sh --partial in nightly/<version>.partial/, which the site's index
+# never lists; the last job, publish-nightly (`nightly <v> sources.json`), moves them into the finished folder
+# and indexes once every piece is there, and only then does the new build replace the previous nightly. A
+# failed or cancelled run's .partial is removed by the cleanup-partial job; the index prunes only an abandoned
+# .partial (newest file older than 2 days). (Until 2026-09-23 the first image of a run pruned the previous one, PC
 # image and all, and the site had a half-built nightly for as long as the run took).
 #
 # The nightly is event-driven since 2026-09-26: a component's develop build, once its `nightly` pre-release
@@ -704,12 +706,13 @@ jobs:
       - name: Delete the published files
         run: rm -rf out img
   publish-nightly:
-    # a development build's last publish: every piece (the images, the packages) went up with --partial and
-    # the site's index left the folder out, so the previous nightly stayed whole meanwhile. This publishes the
-    # fingerprint of what the build was made from (sources.json - the next scheduled run compares it to skip an
-    # unchanged night), takes the .incomplete marker away and indexes: the new build replaces the previous one
-    # only now. A run with a failed image never gets here - the previous nightly stays, the unfinished folder
-    # is removed by the index two days later, and without its sources.json the next night builds again.
+    # a development build's last publish: every piece (the images, the packages) was staged with --partial in
+    # <channel>/<version>.partial/, which the site's index never lists, so the previous nightly stayed whole
+    # meanwhile. This publishes the fingerprint of what the build was made from (sources.json - the next
+    # scheduled run compares it to skip an unchanged night), moves the .partial pieces into the finished folder
+    # and indexes: the new build replaces the previous one only now. A run with a failed image never gets
+    # here - the previous nightly stays, the cleanup-partial job removes the run's .partial (the index prunes
+    # only an abandoned one, newest file older than 2 days), and without its sources.json the next night builds again.
     needs: [plan, assemble, image, publish-release]
     # always(): a run of platforms without an image (psc, win) skips `image`, which would skip this job too
     if: >-
@@ -742,7 +745,7 @@ jobs:
             for x in rpi-armhf rpi-arm64 pcusb psc win; do
               case "$built" in *" $x "*) ;; *) subset=true ;; esac
             done
-            if [ "$subset" = true ]; then carry="$(echo ${{ needs.plan.outputs.platform_list }} | tr ' ' ',')"; fi
+            if [ "$subset" = true ]; then carry="$(echo "${{ needs.plan.outputs.platform_list }}" | tr ' ' ',')"; fi
           fi
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
