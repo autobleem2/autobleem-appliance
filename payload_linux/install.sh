@@ -55,7 +55,7 @@ UPDATE_MODE=0                   # --update: a re-run over an installed Pi from a
                                 # the repository only when it is installed, nothing repartitioned
 RETROARCH_TARBALL=""            # --retroarch-tarball: a prebuilt RetroArch already downloaded (the online update)
 OFFLINE_GOOD=" "                # the --offline files that checked out (offline_setup), as " name name "
-OFFLINE_DIR=""                # --offline: a folder with the RetroArch and cores tarballs (the Pi image carries them), see offline_setup()
+OFFLINE_DIR=""                  # --offline: a folder with the RetroArch and cores tarballs (the Pi image carries them), see offline_setup()
 CORES_TARBALL=""                # --cores-tarball: the cores + assets tarball already downloaded (set by --offline too)
 PRINT_PACKAGES=0                # --print-packages: list the distribution packages this install wants, and stop
 THUMBNAILS=none                 # --thumbnails: none (the launcher fetches each game's cover itself) | boxarts (the whole

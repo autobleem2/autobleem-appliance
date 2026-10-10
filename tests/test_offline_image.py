@@ -115,13 +115,18 @@ class CheckImage(unittest.TestCase):
         self.assertTrue(out.startswith("OK:"), out)
 
     def test_good_image_xz_and_arm64(self):
-        img = build_image(self.tmp, pkg=package(drop=("processors/pe",)))
+        img = build_image(self.tmp)
         subprocess.run(["xz", "-k", img], check=True)
-        rc, out, _ = self.run_check(img + ".xz", "--arch", "arm64")
-        self.assertEqual(rc, 0, out)
-        rc, out, _ = self.run_check(img + ".xz", "--arch", "armhf")
-        self.assertEqual(rc, 1, out)
-        self.assertIn("no processors/pe/", out)
+        for arch in ("arm64", "armhf"):
+            rc, out, _ = self.run_check(img + ".xz", "--arch", arch)
+            self.assertEqual(rc, 0, out)
+
+    def test_pe_required_on_every_arch(self):
+        img = build_image(self.tmp, pkg=package(drop=("processors/pe",)))
+        for arch in ("arm64", "armhf"):
+            rc, out, _ = self.run_check(img, "--arch", arch)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("no processors/pe/", out)
 
     def test_missing_offline_file_and_sums_line(self):
         rc, out, _ = self.run_check(build_image(self.tmp, skip=("coversJ.db", "SHA256SUMS")))
@@ -306,9 +311,102 @@ class CheckReleaseBundled(unittest.TestCase):
                                package(drop=("extensions/store", "extensions/pscbios", "processors/unzip", "processors/pe")))
         self.assertIn("FAIL rpi-pkg: package lacks: extensions/store extensions/pscbios processors/unzip processors/pe", out)
 
-    def test_arm64_needs_no_pe(self):
+    def test_arm64_needs_pe_too(self):
         out = self.run_release("autobleem-rpi-arm64-v9.0.0.tar.gz", package(drop=("processors/pe",)))
-        self.assertIn("PASS rpi64-pkg: package carries the bundled", out)
+        self.assertIn("FAIL rpi64-pkg: package lacks: processors/pe", out)
+
+    def test_pcusb_needs_pe_too(self):
+        out = self.run_release("autobleem-pcusb-i386-v9.0.0.tar.gz", package(drop=("processors/pe",)))
+        self.assertIn("package lacks: processors/pe", out)
+
+
+LAUNCHER_SDK = os.path.join(ROOT, "tools", "launcher_sdk.sh")
+CORE_SHA = "7761e82e" + "0" * 32
+HEADER = """// how: AB_SDK_ABI (bumped by any change to the layout of a class)
+// "layout changed - bump AB_SDK_ABI and update the table". Change a class: bump AB_SDK_ABI
+#ifndef AB_SDK_ABI_H
+#define AB_SDK_ABI 11
+#define AB_SDK_STR(x) #x
+"""
+# a gh that answers the three contents calls launcher_sdk.sh makes and logs each path?ref
+FAKE_GH = r"""#!/usr/bin/env bash
+shift                                   # api
+while [ "${1:-}" = -H ]; do shift 2; done
+url="$1"; echo "$url" >> "$FAKE_GH_LOG"
+case "$url" in
+    repos/autobleem2/autobleem/contents/.gitmodules\?ref=*) cat "$FAKE_GH_DIR/gitmodules" ;;
+    repos/autobleem2/autobleem/contents/autobleem-core\?ref=*) echo "$FAKE_GH_SHA" ;;
+    repos/autobleem2/autobleem-core/contents/src/code/gui/extension.h\?ref="$FAKE_GH_SHA") cat "$FAKE_GH_DIR/extension.h" ;;
+    *) exit 1 ;;
+esac
+"""
+
+
+class LauncherSdk(unittest.TestCase):
+    """tools/launcher_sdk.sh: the SDK number of a launcher build, from the autobleem-core pin's extension.h"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = self._tmp.name
+        self.addCleanup(self._tmp.cleanup)
+
+    def header(self, text):
+        path = os.path.join(self.tmp, "extension.h")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def run_script(self, *args, env=None):
+        p = subprocess.run(["bash", LAUNCHER_SDK, *args], capture_output=True, text=True, timeout=60,
+                           env=env or os.environ)
+        return p.returncode, p.stdout, p.stderr
+
+    def test_fake_extension_h_to_number(self):
+        rc, out, err = self.run_script("--from-header", self.header(HEADER))
+        self.assertEqual((rc, out, err), (0, "11\n", ""))
+
+    def test_define_with_trailing_comment_and_spaces(self):
+        rc, out, _ = self.run_script("--from-header", self.header("#  define   AB_SDK_ABI  42 // bumped\n"))
+        self.assertEqual((rc, out), (0, "42\n"))
+
+    def test_header_without_define(self):
+        rc, out, err = self.run_script("--from-header", self.header("// AB_SDK_ABI 7 only in a comment\n#define OTHER 3\n"))
+        self.assertEqual((rc, out), (1, ""))
+        self.assertIn("no '#define AB_SDK_ABI", err)
+
+    def test_resolves_through_the_pin(self):
+        d = os.path.join(self.tmp, "fake")
+        os.mkdir(d)
+        with open(os.path.join(d, "gh"), "w") as f:
+            f.write(FAKE_GH)
+        os.chmod(os.path.join(d, "gh"), 0o755)
+        with open(os.path.join(d, "gitmodules"), "w") as f:
+            f.write('[submodule "autobleem-themes"]\n\tpath = autobleem-themes\n'
+                    '[submodule "autobleem-core"]\n\tpath = autobleem-core\n\turl = x\n')
+        with open(os.path.join(d, "extension.h"), "w") as f:
+            f.write(HEADER)
+        log = os.path.join(self.tmp, "gh.log")
+        env = dict(os.environ, PATH=d + ":" + os.environ.get("PATH", ""), FAKE_GH_DIR=d, FAKE_GH_LOG=log,
+                   FAKE_GH_SHA=CORE_SHA)
+        rc, out, err = self.run_script("v2.0.0-alpha1-45-g7761e82", env=env)
+        self.assertEqual((rc, out, err), (0, "11\n", ""))
+        with open(log) as f:
+            calls = f.read().split()
+        # the describe is cut to the launcher commit, the core is read at the pinned sha
+        self.assertEqual(calls, ["repos/autobleem2/autobleem/contents/.gitmodules?ref=7761e82",
+                                 "repos/autobleem2/autobleem/contents/autobleem-core?ref=7761e82",
+                                 "repos/autobleem2/autobleem-core/contents/src/code/gui/extension.h?ref=" + CORE_SHA])
+
+    def test_unreachable_data_is_an_error(self):
+        d = os.path.join(self.tmp, "fake")
+        os.mkdir(d)
+        with open(os.path.join(d, "gh"), "w") as f:
+            f.write("#!/usr/bin/env bash\nexit 1\n")
+        os.chmod(os.path.join(d, "gh"), 0o755)
+        env = dict(os.environ, PATH=d + ":" + os.environ.get("PATH", ""))
+        rc, out, err = self.run_script("v2.0.0", env=env)
+        self.assertEqual((rc, out), (1, ""))
+        self.assertIn("cannot read .gitmodules", err)
 
 
 if __name__ == "__main__":

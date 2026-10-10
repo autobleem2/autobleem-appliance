@@ -6,7 +6,7 @@
 #   /opt/autobleem-image/offline/{retroarch.tar.gz,cores.tar.gz,coversU.db,coversP.db,coversJ.db,samples.tar.gz,SHA256SUMS}
 #       all present, each matching its SHA256SUMS line;
 #   the package (/opt/autobleem-image/autobleem-rpi.tar.gz) with extensions/store, extensions/pscbios,
-#       processors/unzip (and processors/pe on armhf, the only Pi package with PE Apps);
+#       processors/unzip, processors/pe (every Linux package carries both);
 #   every extensions/*/bin/<key>/*.so carries 'sdk=N' equal to the launcher's (AB_SDK_ABI: read from the stamp in
 #       the package's autobleem-gui; --sdk N when that binary is packed/unreadable - CI passes the autobleem-core
 #       pin's number; both given and different is a problem too);
@@ -93,8 +93,7 @@ else
     if ! tar -tzf "$pkg" >"$work/pkg.list" 2>/dev/null; then
         problem "$PKG is not a readable tar.gz"
     else
-        need=(extensions/store extensions/pscbios processors/unzip)
-        [ "$ARCH" != armhf ] || need+=(processors/pe)
+        need=(extensions/store extensions/pscbios processors/unzip processors/pe)
         for d in "${need[@]}"; do
             grep -Eq "(^|/)$d/" "$work/pkg.list" || problem "the package has no $d/"
         done

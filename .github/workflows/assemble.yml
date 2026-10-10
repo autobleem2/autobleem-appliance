@@ -117,6 +117,7 @@ jobs:
       sources: ${{ steps.v.outputs.sources }}
       skip: ${{ steps.v.outputs.skip }}
       images: ${{ steps.p.outputs.images }}
+      sdk: ${{ steps.sdk.outputs.sdk }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -163,6 +164,7 @@ jobs:
             if [ -z "$v" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="$GITHUB_REF_NAME"; fi
             [ -n "$v" ] || { echo "no version: push a v* tag, or pass workflow_dispatch's version input" >&2; exit 1; }
             echo "version=$v" >> "$GITHUB_OUTPUT"; echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "launcher_ref=$v" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "source_tag=nightly" >> "$GITHUB_OUTPUT"
@@ -192,6 +194,7 @@ jobs:
           # the launcher alone, it saw the same version and was never offered it)
           d="$(printf '%s' "$fp" | sed -n 's/^autobleem\(@preview\)\{0,1\} launcher-psc-\(.*\)\.tar\.gz .*/\2/p' | head -n1)"
           [ -n "$d" ] || { echo "::error::no launcher-psc asset on autobleem2/autobleem's pre-release"; exit 1; }
+          echo "launcher_ref=$d" >> "$GITHUB_OUTPUT"
           sum="$(printf '%s' "$fp" | sha256sum | cut -c1-16)"
           v="$d-n${sum:0:6}"
           # a preview is named after its branch: preview-feature-ab-gui-<fingerprint> (the launcher's own
@@ -220,6 +223,28 @@ jobs:
             fi
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
+      # the extension ABI this run's launcher and extensions are built against, for tools/check_image.sh --sdk: the
+      # autobleem-core pin of the launcher commit the run builds (the g<hash> of its version), read from that
+      # commit's extension.h - NOT release/*.lock, which names the sdk of an old release
+      - uses: actions/checkout@v7
+        if: steps.v.outputs.skip != 'true' && steps.p.outputs.images == 'true'
+        with:
+          sparse-checkout: tools/launcher_sdk.sh
+          sparse-checkout-cone-mode: false
+      - id: sdk
+        if: steps.v.outputs.skip != 'true' && steps.p.outputs.images == 'true'
+        env:
+          LAUNCHER_REF: ${{ steps.v.outputs.launcher_ref }}
+        run: |
+          sdk="$(bash tools/launcher_sdk.sh "$LAUNCHER_REF")" || sdk=""
+          if [[ "$sdk" =~ ^[0-9]+$ ]]; then
+            echo "launcher $LAUNCHER_REF is built against sdk=$sdk"
+            echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
+          else
+            # the image job then falls back on the launcher's own stamp in the package (check_image.sh)
+            echo "::warning::no SDK number for launcher $LAUNCHER_REF (see the message above); check_image.sh will compare with the launcher's stamp only"
+            echo "sdk=" >> "$GITHUB_OUTPUT"
+          fi
 
   assemble:
     needs: plan
@@ -422,8 +447,9 @@ jobs:
                 --version "${{ needs.plan.outputs.version }}"
               # the image is checked BEFORE the upload step publishes it (set -e: a failing check fails the job).
               # The extensions' SDK number: the launcher's stamp inside the package is what it is compared with;
-              # AB_SDK_ABI, the number of the autobleem-core pin (release/*.lock, [release] sdk), is the fallback
-              # for a launcher whose stamp cannot be read, so a packed binary does not skip the check.
+              # AB_SDK_ABI, the number of the autobleem-core pin of this run's launcher (plan's sdk output),
+              # must equal it and is the fallback for a launcher whose stamp cannot be read, so a packed binary
+              # does not skip the check.
               sdk_arg=()
               if [ -n "${AB_SDK_ABI:-}" ]; then sdk_arg=(--sdk "$AB_SDK_ABI"); fi
               tools/check_image.sh build_image/out/*.img.xz --arch "${{ steps.which.outputs.arch }}" "${sdk_arg[@]}"
@@ -464,11 +490,10 @@ jobs:
           [ "${{ steps.which.outputs.kind }}" = pcusb ] && sec_args=(
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined --cap-add SYS_ADMIN
           )
-          # the extension ABI of the autobleem-core pin: [release] sdk of the newest release/*.lock (tools/check_image.sh
-          # --sdk, the fallback when the launcher's own stamp in the package cannot be read)
-          lock="$(ls release/*.lock 2>/dev/null | sort -V | tail -1 || true)"
-          AB_SDK_ABI=""
-          [ -z "$lock" ] || AB_SDK_ABI="$(awk -F= '/^\[/ { s = $0 } s == "[release]" && $1 ~ /^sdk *$/ { gsub(/ /, "", $2); print $2; exit }' "$lock")"
+          # the extension ABI of the autobleem-core pin of the launcher this run builds (plan's sdk output, read from
+          # that commit's extension.h by tools/launcher_sdk.sh; tools/check_image.sh --sdk, also the fallback when
+          # the launcher's own stamp in the package cannot be read). Empty when plan could not resolve it
+          AB_SDK_ABI="${{ needs.plan.outputs.sdk }}"
           export AB_SDK_ABI
           docker run --rm "${sec_args[@]}" \
             -v "$PWD:$PWD" -w "$PWD" \

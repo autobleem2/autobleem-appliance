@@ -58,11 +58,11 @@ add_tree() {
     if [ -n "$bin" ]; then s="$(stamp_of "$bin")"; [ -n "$s" ] && LSTAMP[$2]="$s"; fi
 }
 # check_bundled LABEL TARGET DIR - an unpacked Pi / PC-stick package must carry what install.sh copies into the
-# data partition: extensions/store, extensions/pscbios, processors/unzip, and processors/pe on the 32-bit Pi (the
-# only Linux package with PE Apps, assemble.sh). A package without them installs, boots and has no Store.
+# data partition: extensions/store, extensions/pscbios, processors/unzip and processors/pe (every Linux package
+# carries both processors, assemble.sh). A package without them installs, boots and has no Store.
 check_bundled() {
     local label="$1" target="$2" tree="$3" want miss=""
-    for want in extensions/store extensions/pscbios processors/unzip $([ "$target" = rpi ] && echo processors/pe); do
+    for want in extensions/store extensions/pscbios processors/unzip processors/pe; do
         [ -n "$(find "$tree" -maxdepth 3 -type d -path "*/$want" | head -1)" ] || miss="$miss $want"
     done
     if [ -n "$miss" ]; then fail "$label" "package lacks:$miss"
