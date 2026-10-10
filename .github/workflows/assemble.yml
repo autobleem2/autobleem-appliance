@@ -241,9 +241,10 @@ jobs:
             echo "launcher $LAUNCHER_REF is built against sdk=$sdk"
             echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
           else
-            # the image job then falls back on the launcher's own stamp in the package (check_image.sh)
-            echo "::warning::no SDK number for launcher $LAUNCHER_REF (see the message above); check_image.sh will compare with the launcher's stamp only"
-            echo "sdk=" >> "$GITHUB_OUTPUT"
+            # no fallback: on rpi the launcher's own stamp is unreadable (packed binary), so an empty sdk would
+            # let the image check pass without comparing anything
+            echo "::error::no SDK number for launcher $LAUNCHER_REF (see the message above); the image SDK check cannot run"
+            exit 1
           fi
 
   assemble:
