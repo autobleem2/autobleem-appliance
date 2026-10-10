@@ -1,0 +1,16 @@
+[Unit]
+Description=AutoBleem status LED: green when the launcher starts
+# Nothing wired = nothing to do: no pin map, no unit run. The helper itself exits 0 when LED_TYPE is not
+# "pixel" or the SPI device is missing.
+ConditionPathExists=/etc/autobleem/gpio.conf
+# Before the launcher so the pixel is green when its screen appears. No Requires= on either side: if this
+# fails, the launcher boots anyway.
+Before=autobleem.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/autobleem-gpio green
+
+[Install]
+WantedBy=multi-user.target

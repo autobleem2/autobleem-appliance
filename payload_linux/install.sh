@@ -54,6 +54,7 @@ UPDATE_MODE=0                   # --update: a re-run over an installed Pi from a
                                 # online update, system/autobleem-update.sh): unattended, RetroArch replaced from
                                 # the repository only when it is installed, nothing repartitioned
 RETROARCH_TARBALL=""            # --retroarch-tarball: a prebuilt RetroArch already downloaded (the online update)
+OFFLINE_GOOD=" "                # the --offline files that checked out (offline_setup), as " name name "
 OFFLINE_DIR=""                  # --offline: a folder with the RetroArch and cores tarballs (the Pi image carries them), see offline_setup()
 CORES_TARBALL=""                # --cores-tarball: the cores + assets tarball already downloaded (set by --offline too)
 PRINT_PACKAGES=0                # --print-packages: list the distribution packages this install wants, and stop
@@ -448,7 +449,8 @@ install_packages() {
 # --retroarch-tarball/--cores-tarball) as DIR/retroarch.tar.gz and DIR/cores.tar.gz with DIR/SHA256SUMS. Each
 # file that checks out becomes the tarball install_retroarch_prebuilt / download_cores_tarball unpack, so the
 # first boot makes no request for them; one that is missing or damaged is left out and the download site
-# supplies it, as without --offline.
+# supplies it, as without --offline. The cover databases (coversU/P/J.db) and the sample pack (samples.tar.gz)
+# ride along the same way: install_cover_databases / install_sample_games use the ones listed in OFFLINE_GOOD.
 offline_setup() {
     [ -n "$OFFLINE_DIR" ] || return 0
     if [ ! -d "$OFFLINE_DIR" ]; then
@@ -456,10 +458,11 @@ offline_setup() {
         return 0
     fi
     local f
-    for f in retroarch.tar.gz cores.tar.gz; do
+    for f in retroarch.tar.gz cores.tar.gz coversU.db coversP.db coversJ.db samples.tar.gz; do
         [ -f "$OFFLINE_DIR/$f" ] || continue
         if [ -f "$OFFLINE_DIR/SHA256SUMS" ] \
            && ( cd "$OFFLINE_DIR" && grep -E "^[0-9a-f]{64} [ *]$f\$" SHA256SUMS | sha256sum -c --status - ); then
+            OFFLINE_GOOD="$OFFLINE_GOOD$f "
             case "$f" in
                 retroarch.tar.gz) [ -n "$RETROARCH_TARBALL" ] || RETROARCH_TARBALL="$OFFLINE_DIR/$f" ;;
                 cores.tar.gz)     [ -n "$CORES_TARBALL" ] || CORES_TARBALL="$OFFLINE_DIR/$f" ;;
@@ -1719,6 +1722,17 @@ install_cover_databases() {
     mkdir -p "$db_dir"
     for name in coversU.db coversP.db coversJ.db; do
         [ -f "$db_dir/$name" ] && continue
+        if [ -n "$OFFLINE_DIR" ] && [[ "$OFFLINE_GOOD" == *" $name "* ]]; then
+            # the image's own copy (sha256-checked by offline_setup): no request
+            if [ "$DRY_RUN" -eq 1 ]; then
+                printf '    would copy %s from %s (the image has it)\n' "$name" "$OFFLINE_DIR"
+                continue
+            fi
+            log "Cover database: $name from the image"
+            if cp -f "$OFFLINE_DIR/$name" "$db_dir/$name.part" && mv -f "$db_dir/$name.part" "$db_dir/$name"; then continue; fi
+            rm -f "$db_dir/$name.part"
+            warn "could not copy $name from $OFFLINE_DIR - fetching it from the download site"
+        fi
         # not behind --no-downloads: that flag is about RetroArch's cores, these are the launcher's own
         url="$REPO_URL/db/$name"
         if [ "$DRY_RUN" -eq 1 ]; then
@@ -1757,33 +1771,48 @@ install_sample_games() {
         log "Sample games: already installed ($(head -1 "$marker")) - not again"
         return 0
     fi
-    command -v python3 >/dev/null 2>&1 || { warn "no python3 - skipping the sample games"; return 0; }
+    # the image's own pack (sha256-checked by offline_setup) wins over the site: no request at all
+    local offline_pack=""
+    if [ -n "$OFFLINE_DIR" ] && [[ "$OFFLINE_GOOD" == *" samples.tar.gz "* ]]; then offline_pack="$OFFLINE_DIR/samples.tar.gz"; fi
+    if [ -z "$offline_pack" ]; then
+        command -v python3 >/dev/null 2>&1 || { warn "no python3 - skipping the sample games"; return 0; }
+    fi
+    if [ "$DRY_RUN" -eq 1 ] && [ -n "$offline_pack" ]; then
+        printf '    would unpack the sample pack %s (the image has it) into %s\n' "$offline_pack" "$DATA_MOUNT"
+        return 0
+    fi
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '    would download %s/samples/latest.json and unpack the pack into %s\n' "$REPO_URL" "$DATA_MOUNT"
         return 0
     fi
     mkdir -p "$(dirname "$latest")"
-    log "Sample games: asking $REPO_URL for the pack"
-    if ! wget -q -O "$latest" "$REPO_URL/samples/latest.json"; then
-        warn "cannot reach $REPO_URL/samples/latest.json - no sample games this time (re-run the installer to get them)"
-        return 0
-    fi
-    read -r url sha date < <(python3 - "$latest" <<'PY'
+    tarball="$DATA_MOUNT/.autobleem-tmp/samples.tar.gz"
+    if [ -n "$offline_pack" ]; then
+        log "Sample games: the pack from the image"
+        url="$offline_pack"; date="the image"
+        cp -f "$offline_pack" "$tarball" || { warn "could not copy $offline_pack - no sample games this time"; return 0; }
+    else
+        log "Sample games: asking $REPO_URL for the pack"
+        if ! wget -q -O "$latest" "$REPO_URL/samples/latest.json"; then
+            warn "cannot reach $REPO_URL/samples/latest.json - no sample games this time (re-run the installer to get them)"
+            return 0
+        fi
+        read -r url sha date < <(python3 - "$latest" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 print(d.get("url", ""), d.get("sha256", ""), d.get("date", ""))
 PY
-    )
-    [ -n "$url" ] || { warn "the repository has no sample pack"; return 0; }
-    tarball="$DATA_MOUNT/.autobleem-tmp/samples.tar.gz"
-    log "Sample games: downloading the pack of $date ($url)"
-    if ! wget -q --show-progress -O "$tarball.part" "$url" \
-       || [ "$(sha256sum "$tarball.part" | cut -d' ' -f1)" != "$sha" ]; then
-        warn "the download failed or its sha256 does not match - no sample games this time"
-        rm -f "$tarball.part"
-        return 0
+        )
+        [ -n "$url" ] || { warn "the repository has no sample pack"; return 0; }
+        log "Sample games: downloading the pack of $date ($url)"
+        if ! wget -q --show-progress -O "$tarball.part" "$url" \
+           || [ "$(sha256sum "$tarball.part" | cut -d' ' -f1)" != "$sha" ]; then
+            warn "the download failed or its sha256 does not match - no sample games this time"
+            rm -f "$tarball.part"
+            return 0
+        fi
+        mv -f "$tarball.part" "$tarball"
     fi
-    mv -f "$tarball.part" "$tarball"
     # only the top-level members the pack actually has: naming one it lacks makes tar fail outright
     # (the pack has had no PS1 game - no Games/ - since 2026-09-20, and every install lost all of its samples
     # to "Games: Not found in archive"); the RetroArch part only where RetroArch is installed
@@ -1926,7 +1955,7 @@ install_boot_splash() {
 configure_boot() {
     [ "$DO_BOOT_CONFIG" -eq 1 ] || { log "skipping boot config (--no-boot-config)"; return 0; }
     case "$PLATFORM" in
-        rpi)   configure_boot_rpi ;;
+        rpi)   configure_boot_rpi; configure_gpio_boot ;;
         pcusb) configure_boot_pcusb ;;
     esac
 }
@@ -2042,6 +2071,78 @@ configure_boot_rpi() {
         { cat "$BOOT_DIR/config.txt"; printf '\n[all]\n# AutoBleem: no rainbow square from the firmware\ndisable_splash=1\n'; } \
             | write_file "$BOOT_DIR/config.txt"
     fi
+}
+
+#*******************************
+# install_gpio
+#*******************************
+# AUTOBLEEM-4, the case's POWER / RESET buttons and status LED (a Pi only). The buttons are device-tree
+# overlays (configure_gpio_boot, below) and need no software; this installs the pin map (only when absent,
+# so edits survive --update), the pixel LED helper and its two units. The units run nothing unless the pin
+# map says LED_TYPE=pixel. Never fatal: the appliance boots the same without any of it.
+install_gpio() {
+    [ "$PLATFORM" = rpi ] || return 0
+    local confdir="${AB_GPIO_CONF_DIR:-/etc/autobleem}" unitdir="${AB_GPIO_UNIT_DIR:-/etc/systemd/system}"
+    log "Installing the GPIO button/LED support"
+    run install -d -m 0755 "$confdir"
+    if [ -f "$confdir/gpio.conf" ]; then
+        log "$confdir/gpio.conf exists - kept"
+    else
+        run install -m 0644 "$SCRIPT_DIR/system/gpio.conf" "$confdir/gpio.conf"
+    fi
+    run install -m 0755 "$SCRIPT_DIR/system/autobleem-gpio.sh" "${AB_GPIO_BIN:-/usr/local/bin/autobleem-gpio}"
+    run install -m 0644 "$SCRIPT_DIR/system/autobleem-gpio.service" "$unitdir/autobleem-gpio.service"
+    run install -m 0644 "$SCRIPT_DIR/system/autobleem-gpio-poweroff.service" "$unitdir/autobleem-gpio-poweroff.service"
+    if [ -z "${AB_GPIO_UNIT_DIR:-}" ]; then
+        run systemctl daemon-reload || true
+        run systemctl enable autobleem-gpio.service autobleem-gpio-poweroff.service || true
+    fi
+}
+
+#*******************************
+# configure_gpio_boot
+#*******************************
+# The AutoBleem block in config.txt, between two marker lines so a re-run replaces it rather than stacking
+# a second one (and so an edit of gpio.conf takes effect on --update):
+#   POWER  dtoverlay=gpio-shutdown: a press is a clean poweroff, and the same press wakes the Pi from halt
+#   RESET  dtoverlay=gpio-key: KEY_PLAYPAUSE (164), what the console's Reset sends; the pull-up holds the pin
+#   plain LED: enable_uart=1 (GPIO14/TXD idles high)    pixel LED: dtparam=spi=on
+# Overlays only register input devices, so an unwired Pi sees nothing. Honours --no-boot-config (the caller).
+# The pin map is read from $AB_GPIO_CONF_DIR/gpio.conf; absent (a dry run before install_gpio) = the defaults.
+configure_gpio_boot() {
+    [ "$PLATFORM" = rpi ] || return 0
+    local cfg="$BOOT_DIR/config.txt" conf="${AB_GPIO_CONF_DIR:-/etc/autobleem}/gpio.conf"
+    [ -f "$cfg" ] || return 0
+    local POWER_GPIO=3 RESET_GPIO=23 LED_TYPE=none
+    # shellcheck source=/dev/null
+    [ -f "$conf" ] && . "$conf"
+    local begin="# AutoBleem GPIO begin" end="# AutoBleem GPIO end" block old
+    block="$begin
+[all]
+# AutoBleem: POWER button (GPIO$POWER_GPIO to GND) = clean poweroff, and wakes the Pi from halt
+dtoverlay=gpio-shutdown,gpio_pin=$POWER_GPIO,active_low=1,gpio_pull=up
+# AutoBleem: RESET button (GPIO$RESET_GPIO to GND) = KEY_PLAYPAUSE"
+    block="$block
+dtoverlay=gpio-key,gpio=$RESET_GPIO,active_low=1,gpio_pull=up,keycode=164"
+    case "$LED_TYPE" in
+        plain) block="$block
+# AutoBleem: plain LED on GPIO14/TXD
+enable_uart=1" ;;
+        pixel) block="$block
+# AutoBleem: RGB pixel on GPIO10 (SPI0 MOSI); if its colours flicker see autobleem-gpio for core_freq_min
+dtparam=spi=on" ;;
+    esac
+    block="$block
+$end"
+    old="$(sed -n "/^$begin\$/,/^$end\$/p" "$cfg")"
+    if [ "$old" = "$block" ]; then
+        log "$cfg: the AutoBleem GPIO block is up to date"
+        return 0
+    fi
+    log "Configuring $cfg (power/reset buttons, LED: $LED_TYPE)"
+    run cp -n "$cfg" "$cfg.autobleem-backup"
+    { awk -v b="$begin" -v e="$end" '$0 == b { skip = 1; next } skip && $0 == e { skip = 0; next } !skip' "$cfg"
+      printf '\n%s\n' "$block"; } | write_file "$cfg"
 }
 
 #*******************************
@@ -2186,6 +2287,7 @@ main() {
     install_sample_games
     phase 9 "Boot setup"
     install_service
+    install_gpio
     install_boot_splash
     configure_boot
     unblock_bluetooth

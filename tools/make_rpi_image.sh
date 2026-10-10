@@ -66,7 +66,8 @@ CORES_TARBALL=""         # --cores-tarball: the cores + assets tarball, staged t
 FETCH_OFFLINE=0          # --fetch-offline: download both from the download repository (--repo), sha256-checked
 ROOT_FREE_MIB=300        # --root-free-mib: free space left in the root partition the pre-install makes
 PREINSTALLED=0           # 1 once preinstall_root() ran: the boot edits and the offline staging key on it
-OFFLINE_FILES=()         # the staged tarballs' local paths, in the order they are written
+OFFLINE_FILES=()         # the staged files' local paths, in the order they are written
+EXTRA_OFFLINE=()         # "local path:name" of the cover databases and the sample pack (--fetch-offline fills it)
 FIRST_USER="autobleem"   # --user: the account the first boot creates (the base image ships none)
 FIRST_PASS="autobleem"   # --password: its password (a documented default, like the PC image's)
 DRY_RUN=0
@@ -119,7 +120,9 @@ Usage: sudo ./tools/make_rpi_image.sh --arch armhf|arm64 --package PATH [options
   --retroarch-tarball FILE   RetroArch for this architecture (the site's rpi/retroarch/ tarball), staged in the
                        image for install.sh --offline
   --cores-tarball FILE the cores + assets tarball (the site's rpi/cores/ tarball), staged the same way
-  --fetch-offline      download both from the download repository (--repo), checked against its sha256
+  --fetch-offline      download both from the download repository (--repo), checked against its sha256, plus the
+                       cover databases (db/covers{U,P,J}.db) and the sample pack (samples/latest.json); all staged
+                       in /opt/autobleem-image/offline with a SHA256SUMS (everything install.sh downloads but BIOS)
   --root-free-mib N    free space left in the pre-install's root partition (default 300; the first boot grows it)
   --user NAME          the account created on the first boot (default autobleem): the base image has no user, and
                        its user wizard would ask for keyboard + user on the screen forever (a plain writer gives it
@@ -247,7 +250,7 @@ preflight() {
         if [ "$PREINSTALL" = yes ]; then
             # the root as a directory (~2.6 GB), the grown image (~4 GB), the base image, and the offline files
             # (cores ~0.4-0.8 GB) in the image and the output
-            need_work_mib=10500; need_out_mib=2000
+            need_work_mib=11000; need_out_mib=2500        # (+ the cover databases ~290 MB, the sample pack)
         fi
         free_mib="$(df -Pm "$WORK_DIR" | awk 'NR == 2 { print $4 }')"
         if [ "$(df -P "$WORK_DIR" | awk 'NR == 2 { print $1 }')" = "$(df -P "$OUT_DIR" | awk 'NR == 2 { print $1 }')" ]; then
@@ -485,6 +488,7 @@ fetch_offline() {
     [ "$FETCH_OFFLINE" -eq 1 ] || return 0
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '    would download the RetroArch and cores tarballs for %s from %s\n' "$ARCH" "$REPO_URL"
+        printf '    would download the cover databases (coversU.db coversP.db coversJ.db) and the sample pack (samples/latest.json) from %s\n' "$REPO_URL"
         return 0
     fi
     local dir="$WORK_DIR/offline-$ARCH" what url sha dest
@@ -513,6 +517,47 @@ PY
         fi
         if [ "$what" = retroarch ]; then RA_TARBALL="$dest"; else CORES_TARBALL="$dest"; fi
     done
+    fetch_offline_extras "$dir"
+}
+
+# the cover databases (db/<name> + db/<name>.sha256) and the sample pack (samples/latest.json -> url + sha256),
+# the rest of what install.sh downloads (but the BIOS files); same cache dir, sha256-checked
+fetch_offline_extras() {
+    local dir="$1" name sha dest url
+    EXTRA_OFFLINE=()
+    for name in coversU.db coversP.db coversJ.db; do
+        dest="$dir/$name"
+        wget -q -O "$dir/$name.sha256" "$REPO_URL/db/$name.sha256" || die "cannot reach $REPO_URL/db/$name.sha256 (--fetch-offline)"
+        sha="$(cut -d' ' -f1 <"$dir/$name.sha256")"
+        [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || die "$REPO_URL/db/$name.sha256 holds no sha256"
+        if [ -f "$dest" ] && [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$sha" ]; then
+            log "Offline: $name already in $dir"
+        else
+            log "Offline: downloading $REPO_URL/db/$name"
+            wget -nv -O "$dest.part" "$REPO_URL/db/$name" || die "download of $REPO_URL/db/$name failed"
+            [ "$(sha256sum "$dest.part" | cut -d' ' -f1)" = "$sha" ] || die "sha256 mismatch on $REPO_URL/db/$name"
+            mv -f "$dest.part" "$dest"
+        fi
+        EXTRA_OFFLINE+=("$dest:$name")
+    done
+    dest="$dir/samples.tar.gz"
+    wget -q -O "$dir/samples-latest.json" "$REPO_URL/samples/latest.json" || die "cannot reach $REPO_URL/samples/latest.json (--fetch-offline)"
+    read -r url sha < <(python3 - "$dir/samples-latest.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(d.get("url", ""), d.get("sha256", ""))
+PY
+    )
+    [ -n "$url" ] && [ -n "$sha" ] || die "$REPO_URL has no sample pack"
+    if [ -f "$dest" ] && [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$sha" ]; then
+        log "Offline: samples.tar.gz already in $dir"
+    else
+        log "Offline: downloading $url"
+        wget -nv -O "$dest.part" "$url" || die "download of $url failed"
+        [ "$(sha256sum "$dest.part" | cut -d' ' -f1)" = "$sha" ] || die "sha256 mismatch on $url"
+        mv -f "$dest.part" "$dest"
+    fi
+    EXTRA_OFFLINE+=("$dest:samples.tar.gz")
 }
 
 # OFFLINE_FILES = "local path:name in the image" for each staged tarball, and OFFLINE_SUMS = the SHA256SUMS the
@@ -520,9 +565,12 @@ PY
 prepare_offline() {
     OFFLINE_FILES=()
     OFFLINE_SUMS=""
-    [ -n "$RA_TARBALL" ] || [ -n "$CORES_TARBALL" ] || return 0
+    [ -n "$RA_TARBALL" ] || [ -n "$CORES_TARBALL" ] || [ ${#EXTRA_OFFLINE[@]} -gt 0 ] || [ "$FETCH_OFFLINE" -eq 1 ] || return 0
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '    would stage the RetroArch / cores tarballs in /opt/autobleem-image/offline\n'
+        if [ "$FETCH_OFFLINE" -eq 1 ]; then
+            printf '    would stage coversU.db coversP.db coversJ.db samples.tar.gz in /opt/autobleem-image/offline (+ SHA256SUMS)\n'
+        fi
         return 0
     fi
     if [ "$PREINSTALL" != yes ]; then
@@ -532,12 +580,12 @@ prepare_offline() {
     OFFLINE_SUMS="$WORK_DIR/offline-SHA256SUMS"
     : >"$OFFLINE_SUMS"
     local pair
-    for pair in "$RA_TARBALL:retroarch.tar.gz" "$CORES_TARBALL:cores.tar.gz"; do
+    for pair in "$RA_TARBALL:retroarch.tar.gz" "$CORES_TARBALL:cores.tar.gz" "${EXTRA_OFFLINE[@]+"${EXTRA_OFFLINE[@]}"}"; do
         [ -n "${pair%%:*}" ] || continue
         OFFLINE_FILES+=("$pair")
         printf '%s  %s\n' "$(sha256sum "${pair%%:*}" | cut -d' ' -f1)" "${pair#*:}" >>"$OFFLINE_SUMS"
     done
-    log "Offline payload: $(cat "$OFFLINE_SUMS" | wc -l) tarball(s) staged in the image, $(du -ch "${OFFLINE_FILES[@]%%:*}" | tail -1 | cut -f1)"
+    log "Offline payload: $(cat "$OFFLINE_SUMS" | wc -l) file(s) staged in the image, $(du -ch "${OFFLINE_FILES[@]%%:*}" | tail -1 | cut -f1)"
 }
 
 #*******************************

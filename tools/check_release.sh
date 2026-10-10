@@ -57,6 +57,17 @@ add_tree() {
     bin="$(launcher_of "$3")"
     if [ -n "$bin" ]; then s="$(stamp_of "$bin")"; [ -n "$s" ] && LSTAMP[$2]="$s"; fi
 }
+# check_bundled LABEL TARGET DIR - an unpacked Pi / PC-stick package must carry what install.sh copies into the
+# data partition: extensions/store, extensions/pscbios, processors/unzip and processors/pe (every Linux package
+# carries both processors, assemble.sh). A package without them installs, boots and has no Store.
+check_bundled() {
+    local label="$1" target="$2" tree="$3" want miss=""
+    for want in extensions/store extensions/pscbios processors/unzip processors/pe; do
+        [ -n "$(find "$tree" -maxdepth 3 -type d -path "*/$want" | head -1)" ] || miss="$miss $want"
+    done
+    if [ -n "$miss" ]; then fail "$label" "package lacks:$miss"
+    else pass "$label" "package carries the bundled extensions and processors"; fi
+}
 # unpack LABEL TARGET FILE REQUIRE_EMULATORS
 unpack() {
     local dest="$work/$((${#T_LABEL[@]} + 1))-$1"
@@ -68,6 +79,7 @@ unpack() {
     # (unzip returns 1 for warnings - the odd file name - and the tree is still readable)
     [ -n "$(ls -A "$dest")" ] || { fail "$1" "could not unpack $(basename "$3")"; return; }
     add_tree "$1" "$2" "$dest" "$4"
+    case "$2" in rpi | rpi64 | pcusb) check_bundled "$1" "$2" "$dest" ;; esac
 }
 
 for dist in "$@"; do
