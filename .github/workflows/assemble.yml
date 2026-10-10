@@ -406,10 +406,27 @@ jobs:
               # newer-than check (2026-09-23) then reuses on the next run instead of re-decompressing (a
               # modest ~30s saving here, but free once the base itself is already cached) - costs that
               # extra disk space on the host permanently, on top of the ~550 MB compressed base.
+              # --preinstall yes --fetch-offline (every Pi image carries everything install.sh would download but
+              # the PS1 BIOS and the RetroArch BIOS pack): the packages, splash and initramfs are installed in the
+              # root, and RetroArch, the cores, the three cover databases and the sample pack are staged in
+              # /opt/autobleem-image/offline for install.sh --offline. --preinstall yes needs proot >= 5.5.0 and
+              # qemu-user-static (qemu-arm-static / qemu-aarch64-static), root and --rootless: all of that comes
+              # from the build image ghcr.io/autobleem2/autobleem-build (tag develop on a dev run, latest on a
+              # release; built by the autobleem-build repo) that the docker run below starts - this job neither
+              # installs them nor pins the image. With "yes" a build image lacking them fails the job here
+              # instead of quietly shipping an image that downloads at first boot (what "auto" would do).
               tools/make_rpi_image.sh --arch "${{ steps.which.outputs.arch }}" --rootless --keep-raw "${base_arg[@]}" \
+                --preinstall yes --fetch-offline \
                 --package dist/autobleem-${{ matrix.platform }}-*.tar.gz \
                 --work "$CACHE" --out build_image/out \
                 --version "${{ needs.plan.outputs.version }}"
+              # the image is checked BEFORE the upload step publishes it (set -e: a failing check fails the job).
+              # The extensions' SDK number: the launcher's stamp inside the package is what it is compared with;
+              # AB_SDK_ABI, the number of the autobleem-core pin (release/*.lock, [release] sdk), is the fallback
+              # for a launcher whose stamp cannot be read, so a packed binary does not skip the check.
+              sdk_arg=()
+              if [ -n "${AB_SDK_ABI:-}" ]; then sdk_arg=(--sdk "$AB_SDK_ABI"); fi
+              tools/check_image.sh build_image/out/*.img.xz --arch "${{ steps.which.outputs.arch }}" "${sdk_arg[@]}"
               ;;
             pcusb)
               # --rootless here, since 2026-09-29 (was --mount + --privileged on psc-build): bleemmachine's
@@ -447,10 +464,16 @@ jobs:
           [ "${{ steps.which.outputs.kind }}" = pcusb ] && sec_args=(
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined --cap-add SYS_ADMIN
           )
+          # the extension ABI of the autobleem-core pin: [release] sdk of the newest release/*.lock (tools/check_image.sh
+          # --sdk, the fallback when the launcher's own stamp in the package cannot be read)
+          lock="$(ls release/*.lock 2>/dev/null | sort -V | tail -1 || true)"
+          AB_SDK_ABI=""
+          [ -z "$lock" ] || AB_SDK_ABI="$(awk -F= '/^\[/ { s = $0 } s == "[release]" && $1 ~ /^sdk *$/ { gsub(/ /, "", $2); print $2; exit }' "$lock")"
+          export AB_SDK_ABI
           docker run --rm "${sec_args[@]}" \
             -v "$PWD:$PWD" -w "$PWD" \
             -v "$AB_IMAGE_CACHE_DIR:$AB_IMAGE_CACHE_DIR" \
-            -e AB_IMAGE_CACHE_DIR -e AB_XZ_LEVEL \
+            -e AB_IMAGE_CACHE_DIR -e AB_XZ_LEVEL -e AB_SDK_ABI \
             ghcr.io/autobleem2/autobleem-build:${{ needs.plan.outputs.dev == 'true' && 'develop' || 'latest' }} \
             bash "$PWD/build_image/run.sh"
       - uses: actions/upload-artifact@v7
