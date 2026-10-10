@@ -218,6 +218,14 @@ fi
 # directories; they have no business on the Pi
 find "$STAGE" -type f -name placeholder -delete
 
+# AUTOBLEEM-4: the GPIO button/LED files ride in system/ (copied with the payload above); a package without
+# them would install a Pi with no power/reset support, so a missing one fails the build. Rpi packages only.
+if [ "$ARCH" != i386 ]; then
+    for f in autobleem-gpio.sh autobleem-gpio.service autobleem-gpio-poweroff.service gpio.conf; do
+        [ -f "$STAGE/system/$f" ] || { echo "no system/$f in the payload - the GPIO support would be missing" >&2; exit 1; }
+    done
+fi
+
 # Best effort: on a Windows build host the executable bit does not stick, which is why install.sh checks for
 # the binary with -f rather than -x, chmods what it deploys itself, and is documented as "sudo bash install.sh".
 chmod +x "$STAGE/install.sh" "$STAGE/system/"*.sh "$STAGE/Autobleem/rc/"*.sh "$APP/autobleem-gui"          "$STAGE/Autobleem/bin/emu/pcsx-ab" "$STAGE/Autobleem/bin/emunxt/pcsx-ab" 2>/dev/null || true

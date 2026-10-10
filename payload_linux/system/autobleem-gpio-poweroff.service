@@ -1,0 +1,13 @@
+[Unit]
+Description=AutoBleem status LED: orange while powering off
+ConditionPathExists=/etc/autobleem/gpio.conf
+# Pulled in by poweroff.target and halt.target only; runs before shutdown.target starts killing things.
+DefaultDependencies=no
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/autobleem-gpio orange
+
+[Install]
+WantedBy=poweroff.target halt.target
