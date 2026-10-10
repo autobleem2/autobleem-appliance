@@ -564,11 +564,17 @@ jobs:
     # pre-move behaviour where the image job's own inline publish failing was self-contained). A missing
     # image just means the best-effort download-artifact step below finds nothing and the per-platform image
     # loop skips it - the same "no images built" shape as always.
+    # That holds for a tag (release) run only. A development build (nightly/preview) is different: its pieces go
+    # into nightly/<version>.partial/ and publish-nightly moves them into the finished folder, so a failed image
+    # would leave a nightly that lacks it - on a dev run the image result must be success or skipped (gated off
+    # or a platform without an image), else nothing is published and cleanup-partial removes what is staged.
     needs: [plan, assemble, image, sign-win]
     if: >-
       always() && needs.assemble.result == 'success' &&
       (needs.sign-win.result == 'success' || needs.sign-win.result == 'skipped') &&
-      (startsWith(github.ref, 'refs/tags/v') || needs.plan.outputs.dev == 'true')
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (needs.plan.outputs.dev == 'true' &&
+        (needs.image.result == 'success' || needs.image.result == 'skipped')))
     runs-on: [self-hosted, psc-build]
     env:
       AB_REPO_DIR: /home/claude/autobleem-repo
@@ -725,9 +731,48 @@ jobs:
           printf '{"sources": "%s", "images": %s, "platforms": "%s", "run": "%s/%s/actions/runs/%s"}\n' \
             "${{ needs.plan.outputs.sources }}" "${{ needs.plan.outputs.images }}" "${{ needs.plan.outputs.platform_list }}" \
             "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > out/sources.json
+          # a run of some platforms only (workflow_dispatch platforms=...): the others are carried over from the
+          # previous nightly before the index runs, so the new folder is whole. AB_CARRY_PLATFORMS names the
+          # platforms this run BUILT (nightly_carry.py carries the complement); a full-platform run sets nothing
+          # and carries nothing. Only the nightly channel has a "previous nightly" to carry from.
+          carry=""
+          if [ "${{ needs.plan.outputs.channel }}" = nightly ]; then
+            built=" ${{ needs.plan.outputs.platform_list }} "
+            subset=false
+            for x in rpi-armhf rpi-arm64 pcusb psc win; do
+              case "$built" in *" $x "*) ;; *) subset=true ;; esac
+            done
+            if [ "$subset" = true ]; then carry="$(echo ${{ needs.plan.outputs.platform_list }} | tr ' ' ',')"; fi
+          fi
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+            -e AB_CARRY_PLATFORMS="$carry" \
             ghcr.io/autobleem2/autobleem-build:develop \
             bash autobleem-repo-tools/tools/repo_publish.sh --local "${{ needs.plan.outputs.channel }}" \
               "${{ needs.plan.outputs.version }}" out/sources.json
           rm -rf out
+  cleanup-partial:
+    # a development build that did not finish (a failed or cancelled job anywhere before the end) leaves its
+    # staged pieces in nightly/<version>.partial/; the index never lists them and prunes them after two days,
+    # but a rerun of the same version would merge them into its own build - remove them now. Only the
+    # .partial folder of this run's version goes (repo_publish.sh cleanup-partial); a finished nightly is untouched.
+    needs: [plan, image, publish-release, publish-nightly]
+    if: >-
+      always() && needs.plan.outputs.dev == 'true' &&
+      (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: [self-hosted, psc-build]
+    env:
+      AB_REPO_DIR: /home/claude/autobleem-repo
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: autobleem2/autobleem-repo
+          path: autobleem-repo-tools
+      - name: Remove ${{ needs.plan.outputs.channel }}/${{ needs.plan.outputs.version }}.partial
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
+            ghcr.io/autobleem2/autobleem-build:develop \
+            bash autobleem-repo-tools/tools/repo_publish.sh --local cleanup-partial \
+              "${{ needs.plan.outputs.channel }}" "${{ needs.plan.outputs.version }}"
