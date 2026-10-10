@@ -627,6 +627,21 @@ jobs:
           # the images, one artifact subdir at a time - same publish logic the `image` job used to run
           # in-place on psc-build, just relocated here now that it's the only self-hosted job with REPO_DIR.
           V="${{ needs.plan.outputs.version }}"
+          # a run of ONE platform matches ONE image artifact, and download-artifact then extracts it straight
+          # into img/ with no subfolder (a full run has three and gets img/image-<platform>/ each); put it
+          # where the loop below looks (2026-10-10, run 38012890148 built the armhf image and published none)
+          if compgen -G "img/*.img.xz" >/dev/null; then
+            single=(img/*.img.xz)
+            [ "${#single[@]}" -eq 1 ] || { echo "::error::${#single[@]} images directly in img/, expected one" >&2; exit 1; }
+            case "${single[0]}" in
+              *-rpi-armhf.img.xz) sub=image-rpi-armhf ;;
+              *-rpi-arm64.img.xz) sub=image-rpi-arm64 ;;
+              *-pcusb-i386.img.xz) sub=image-pcusb ;;
+              *) echo "::error::unknown image ${single[0]}" >&2; exit 1 ;;
+            esac
+            mkdir -p "img/$sub"
+            find img -maxdepth 1 -type f -exec mv {} "img/$sub/" \;
+          fi
           for d in img/image-*/; do
             [ -d "$d" ] || continue
             imgxz=("$d"*.img.xz); [ -e "${imgxz[0]}" ] || continue
