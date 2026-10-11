@@ -6,7 +6,7 @@
 #   /opt/autobleem-image/offline/{retroarch.tar.gz,cores.tar.gz,coversU.db,coversP.db,coversJ.db,samples.tar.gz,SHA256SUMS}
 #       all present, each matching its SHA256SUMS line;
 #   the package (/opt/autobleem-image/autobleem-rpi.tar.gz) with extensions/store, extensions/pscbios,
-#       processors/unzip, processors/pe (every Linux package carries both);
+#       processors/unzip, processors/pe (every Linux package carries both) and system/openbios.bin;
 #   every extensions/*/bin/<key>/*.so carries 'sdk=N' equal to the launcher's (AB_SDK_ABI: read from the stamp in
 #       the package's autobleem-gui; --sdk N when that binary is packed/unreadable - CI passes the autobleem-core
 #       pin's number; both given and different is a problem too);
@@ -97,6 +97,7 @@ else
         for d in "${need[@]}"; do
             grep -Eq "(^|/)$d/" "$work/pkg.list" || problem "the package has no $d/"
         done
+        grep -Eq "(^|/)system/openbios\.bin$" "$work/pkg.list" || problem "the package has no system/openbios.bin"
         tar -xzf "$pkg" -C "$tree" --wildcards '*extensions/*/bin/*' '*bin/autobleem/autobleem-gui' 2>/dev/null || true
         launcher="$(find "$tree" -type f -name autobleem-gui | head -1)"
         abi=""

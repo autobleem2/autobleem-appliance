@@ -147,7 +147,7 @@ Usage: sudo bash install.sh [options]
                        buildbot.libretro.com (a few hundred MB; RetroArch's Online Updater can do it later)
   --no-bios            do not download the BIOS pack (system/biospack.txt, biospack-arm64.txt or -i386.txt: ~190-230 MB
                        of console, computer, arcade and ScummVM files from github.com/Abdess/retrobios into RetroArch/system, and
-                       the PS1 BIOS for pcsx-ab into System/Bios)
+                       the PS1 BIOS for pcsx-ab into System/Bios; pcsx-ab then gets the bundled OpenBIOS)
   --ps1-bios-only      of the BIOS pack fetch only the PlayStation files (scph*.bin, ps1_rom.bin, psxonpsp660.bin - what
                        pcsx-ab and the PS1 cores use), from the same list and by the same code as the whole pack
   --no-samples         do not install the sample games (a 1 MB pack from the download repository: a homebrew
@@ -1181,14 +1181,15 @@ bios_detail_loop() {
 # download lands in a .part next to the target and is renamed once its hash checks out, so a power cut
 # cannot leave a half file that looks whole.
 download_bios_pack() {
-    [ "$DO_BIOS" -eq 1 ] || { log "skipping the BIOS pack (--no-bios)"; return 0; }
+    # without the pack pcsx-ab still gets a BIOS: install_ps1_bios falls back to the package's OpenBIOS
+    [ "$DO_BIOS" -eq 1 ] || { log "skipping the BIOS pack (--no-bios)"; install_ps1_bios; return 0; }
     local manifest_name=biospack.txt
     case "$ARCH" in
         arm64) manifest_name=biospack-arm64.txt ;;
         i386)  manifest_name=biospack-i386.txt ;;
     esac
     local manifest="$SCRIPT_DIR/system/$manifest_name"
-    [ -f "$manifest" ] || { warn "no system/$manifest_name in the package - no BIOS files installed"; return 0; }
+    [ -f "$manifest" ] || { warn "no system/$manifest_name in the package - no BIOS files installed"; install_ps1_bios; return 0; }
 
     # --retroarch none is a PS1-only AutoBleem: nothing reads RetroArch/system but pcsx-ab's two files
     # (install_ps1_bios), so the rest of the ~200 MB pack is not fetched. Same manifest, filtered by name.
@@ -1211,7 +1212,8 @@ download_bios_pack() {
     total="$(echo "$entries" | grep -c .)"
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '    would download the %s BIOS files of %s into %s/system\n' "$total" "$(basename "$manifest")" "$RA_ROOT"
-        printf '    would copy scph5501.bin/scph5500.bin to %s/System/Bios as romw.bin/romJP.bin if not there\n' "$DATA_MOUNT"
+        printf '    would copy scph5501.bin/scph5500.bin to %s/System/Bios as romw.bin/romJP.bin if not there (or over OpenBIOS),\n' "$DATA_MOUNT"
+        printf '    and the package'"'"'s OpenBIOS where the pack has no Sony BIOS\n'
         return 0
     fi
     log "BIOS pack: $total files into $RA_ROOT/system (only what is missing, 4 at a time)"
@@ -1257,17 +1259,32 @@ download_bios_pack() {
 # for every game and romJP.bin for a Japanese one (the console's names - see the launch script). The pack's
 # SCPH-5501 (NTSC-U, v3.0) and SCPH-5500 (NTSC-J, v3.0) fill the two names when the user has not put their
 # own there. Only copies: the originals stay in system/ for pcsx_rearmed.
+# A name the pack cannot fill gets the package's system/openbios.bin (the owner, 2026-10-11: OpenBIOS, built by
+# autobleem2/open_bios, in place of pcsx-ab's HLE BIOS). That file is ours, not the user's - OpenBIOS's name at
+# 0x78 tells it apart: a Sony BIOS the pack brings later replaces it, a newer package's OpenBIOS refreshes it.
+is_openbios() {
+    [ -f "$1" ] && [ "$(dd if="$1" bs=1 skip=120 count=8 2>/dev/null)" = OpenBIOS ]
+}
 install_ps1_bios() {
-    local bios_dir="$DATA_MOUNT/System/Bios" pair name src
+    local bios_dir="$DATA_MOUNT/System/Bios" pair name src open="$SCRIPT_DIR/system/openbios.bin"
     for pair in romw.bin:scph5501.bin romJP.bin:scph5500.bin; do
         name="${pair%%:*}"; src="$RA_ROOT/system/${pair#*:}"
-        if [ -f "$bios_dir/$name" ]; then
+        if [ -f "$bios_dir/$name" ] && ! is_openbios "$bios_dir/$name"; then
             log "Keeping the existing $bios_dir/$name"
         elif [ -f "$src" ]; then
             log "PS1 BIOS for pcsx-ab: $(basename "$src") -> $bios_dir/$name"
             run cp "$src" "$bios_dir/$name"
+        elif [ -f "$open" ]; then
+            if cmp -s "$open" "$bios_dir/$name"; then
+                log "Keeping OpenBIOS as $bios_dir/$name (no Sony BIOS)"
+            else
+                log "PS1 BIOS for pcsx-ab: OpenBIOS -> $bios_dir/$name (no Sony BIOS)"
+                run cp "$open" "$bios_dir/$name"
+            fi
+        elif [ -f "$bios_dir/$name" ]; then
+            log "Keeping OpenBIOS as $bios_dir/$name"
         else
-            warn "no $src - pcsx-ab has no $name and will use its HLE BIOS"
+            warn "no $src and no OpenBIOS in the package - pcsx-ab has no $name and will use its HLE BIOS"
         fi
     done
 }
@@ -2196,7 +2213,8 @@ summary() {
 
   Games go in      $DATA_MOUNT/Games/<game name>/      (one folder per game, .cue+.bin / .pbp / .chd)
   BIOS             $DATA_MOUNT/System/Bios/            romw.bin (+ romJP.bin for Japanese games) for pcsx-ab -
-                                                       filled from the BIOS pack unless you put your own there
+                                                       filled from the BIOS pack unless you put your own there,
+                                                       else the bundled OpenBIOS
   RetroArch        $DATA_MOUNT/RetroArch/    roms/<system>/ for its games (a folder per system is there),
                                               system/ the cores' BIOS files (the pack is there), cores/ info/ saves/
                                               states/ playlists/ ... the standard layout. After copying games

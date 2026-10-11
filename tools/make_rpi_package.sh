@@ -200,6 +200,17 @@ else
     stage_themes "$STAGE"
 fi
 
+# OpenBIOS (the owner, 2026-10-11): system/openbios.bin, pcsx-ab's BIOS when the player has no Sony one - a
+# local file (AB_OPENBIOS=<openbios.bin>, e.g. a fresh open_bios ci/build.sh), else autobleem2/open_bios'
+# nightly. Without either the package still works: install.sh says pcsx-ab will use its HLE BIOS.
+if [ -n "${AB_OPENBIOS:-}" ]; then
+    cp "$AB_OPENBIOS" "$STAGE/system/openbios.bin"
+    echo "==> OpenBIOS: $AB_OPENBIOS (AB_OPENBIOS)"
+else
+    AB_SOURCE_TAG="${AB_SOURCE_TAG:-nightly}" stage_openbios "$STAGE/system" ||
+        echo "    (no OpenBIOS - set AB_OPENBIOS or authenticate gh; pcsx-ab will use its HLE BIOS without a Sony one)"
+fi
+
 # cover art databases: not in the package by default since 2026-09-19 - they are 290 MB of the 306, and
 # install.sh downloads them from the download repository (CLAUDE.md, "The download repository"; a Pi needs
 # the network for its install anyway). --with-covers puts them in: the Docker image's copy

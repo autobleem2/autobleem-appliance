@@ -80,6 +80,30 @@ stage_processor() {
     echo "    bundled $name ($repo@$tag) for $*"
 }
 
+# stage_openbios DEST - the PlayStation BIOS built from OpenBIOS (autobleem2/open_bios, the owner 2026-10-11)
+# as DEST/openbios.bin, for every package but the console's: the installers put it where pcsx-ab looks for the
+# BIOS when the player has no Sony BIOS, in place of the emulator's built-in (HLE) one. Keeps a version of its
+# own, as a processor does: a development build takes the rolling `nightly`, a release the latest v* release
+# (none = an error, not a silent nightly). Checked here: 512 KB and OpenBIOS's own name at 0x78, the mark the
+# installers tell it from a Sony BIOS by.
+stage_openbios() {
+    local dest="$1" repo=autobleem2/open_bios tag tmp f
+    tag="${AB_SOURCE_TAG:-}"
+    if [ -z "$tag" ]; then
+        tag="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null)" || tag=""
+        [ -n "$tag" ] || { echo "$repo has no v* release yet - a release build cannot bundle its nightly" >&2; return 1; }
+    fi
+    tmp="$(mktemp -d)"
+    AB_SOURCE_TAG="$tag" fetch_release_assets "$repo" "$tag" "openbios-*.bin" "$tmp" || return 1
+    f="$(ls "$tmp"/openbios-*.bin | head -n 1)"
+    [ "$(wc -c < "$f")" -eq 524288 ] || { echo "$repo@$tag: $(basename "$f") is not 512 KB" >&2; return 1; }
+    [ "$(dd if="$f" bs=1 skip=120 count=8 2>/dev/null)" = OpenBIOS ] || { echo "$repo@$tag: $(basename "$f") lacks the OpenBIOS mark at 0x78" >&2; return 1; }
+    mkdir -p "$dest"
+    cp "$f" "$dest/openbios.bin"
+    rm -rf "$tmp"
+    echo "    bundled openbios.bin ($repo@$tag: $(basename "$f"))"
+}
+
 # stage_extension REPO NAME KEY DEST [LAUNCHER] - an extension every package ships (the AutoBleem Store - the
 # owner, 2026-09-25; it was a separate download): its package <repo name>-<KEY>-<v>.zip (Extensions/<NAME>/
 # inside, bin/<KEY>/ only) unpacked to DEST/<NAME>/. Keeps a version of its own, as a processor does - never

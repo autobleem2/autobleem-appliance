@@ -59,14 +59,16 @@ add_tree() {
 }
 # check_bundled LABEL TARGET DIR - an unpacked Pi / PC-stick package must carry what install.sh copies into the
 # data partition: extensions/store, extensions/pscbios, processors/unzip and processors/pe (every Linux package
-# carries both processors, assemble.sh). A package without them installs, boots and has no Store.
+# carries both processors, assemble.sh). A package without them installs, boots and has no Store. And
+# system/openbios.bin (assemble.sh's stage_openbios): without it a player with no Sony BIOS gets pcsx-ab's HLE one.
 check_bundled() {
     local label="$1" target="$2" tree="$3" want miss=""
     for want in extensions/store extensions/pscbios processors/unzip processors/pe; do
         [ -n "$(find "$tree" -maxdepth 3 -type d -path "*/$want" | head -1)" ] || miss="$miss $want"
     done
+    [ -n "$(find "$tree" -maxdepth 3 -type f -path "*/system/openbios.bin" | head -1)" ] || miss="$miss system/openbios.bin"
     if [ -n "$miss" ]; then fail "$label" "package lacks:$miss"
-    else pass "$label" "package carries the bundled extensions and processors"; fi
+    else pass "$label" "package carries the bundled extensions, processors and OpenBIOS"; fi
 }
 # unpack LABEL TARGET FILE REQUIRE_EMULATORS
 unpack() {

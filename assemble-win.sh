@@ -60,6 +60,9 @@ stage_processor autobleem2/proc_unzip unzip "$APP/Processors" windows-x86_64
 # the bundled extension, the AutoBleem Store (the owner, 2026-09-25): Extensions/ in the program folder;
 # AutoBleemWinSetup (core's WindowsInstallJob) copies it into the data tree's Extensions/ on every install and update
 stage_extension autobleem2/ext_store store win "$APP/Extensions" "$APP/autobleem-gui.exe"
+# OpenBIOS (the owner, 2026-10-11): Bios/openbios.bin in the program folder; AutoBleemWinSetup (core's
+# installPs1Bios) gives it to pcsx-ab as romw.bin/romJP.bin when there is no Sony BIOS, so never the HLE BIOS
+stage_openbios "$APP/Bios"
 fetch_release_assets autobleem2/autobleem-pc-tools "$VERSION" "pc-tools-win64-*.zip" "$dl"
 unzip -q "$dl"/pc-tools-win64-*.zip -d "$work/pc"
 [ -s "$work/pc/AutoBleemWinSetup/AutoBleemWinSetup.exe" ] || { echo "pc-tools-win64 lacks AutoBleemWinSetup.exe" >&2; exit 1; }
