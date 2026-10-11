@@ -48,6 +48,7 @@ def package(sdk=8, ext_sdk=8, drop=()):
         "extensions/pscbios/bin/rpi/pscbios.so": b"ELF" + STAMP % ext_sdk,
         "processors/unzip/processor.ini": b"x",
         "processors/pe/processor.ini": b"x",
+        "system/openbios.bin": b"x",
     }
     for d in drop:
         members = {k: v for k, v in members.items() if not k.startswith(d + "/")}
@@ -162,6 +163,7 @@ class CheckImage(unittest.TestCase):
             "extensions/pscbios/bin/rpi/pscbios.so": b"ELF" + STAMP % 8,
             "processors/unzip/processor.ini": b"x",
             "processors/pe/processor.ini": b"x",
+            "system/openbios.bin": b"x",
         })
         img = build_image(self.tmp, pkg=pkg)
         rc, out, _ = self.run_check(img)

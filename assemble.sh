@@ -42,6 +42,9 @@ stage_processor autobleem2/proc_unzip unzip "$STAGE/processors" $KEYS
 # rc/pe_env.sh). Its zip carries bin/linux-armhf, bin/linux-arm64 and bin/linux-i386 (proc_pe ci/build.sh), so every
 # Linux package bundles it like unzip (AUTOBLEEM-8)
 stage_processor autobleem2/proc_pe pe "$STAGE/processors" $KEYS
+# OpenBIOS (the owner, 2026-10-11): install.sh's install_ps1_bios gives it to pcsx-ab as romw.bin/romJP.bin when
+# the BIOS pack brought no Sony BIOS, so a game never boots on the emulator's HLE BIOS
+stage_openbios "$STAGE/system"
 # the bundled extension, the AutoBleem Store (the owner, 2026-09-25) - install.sh copies extensions/<name>/ into
 # the data partition's Extensions/ on every install and update
 stage_extension autobleem2/ext_store store "$EXT" "$STAGE/extensions" "$STAGE/Autobleem/bin/autobleem/autobleem-gui"
