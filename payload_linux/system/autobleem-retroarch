@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+#
+# The launcher's RetroArch runner on a Raspberry Pi and on the PC stick (PLATFORM-24). The launcher starts it as a
+# child process - it runs as root itself (autobleem.service has no User=), so no sudo is needed:
+#
+#   autobleem-retroarch install|remove [--bios] --progress FILE [--mount DIR] [-- INSTALL.SH OPTIONS...]
+#
+# install is also the update (a newer remote version replaces the old); install --bios also fetches the BIOS pack;
+# remove keeps the BIOS unless --bios. It runs the installed copy of install.sh (--retroarch-add / --retroarch-remove)
+# and turns its "@@phase i/n key done total" lines into FILE - ONE line, rewritten atomically (FILE.tmp, then rename)
+# at every phase change and at least every second:
+#
+#   phase <i>/<n>|<key>|<done>|<total>
+#
+# and at the end, once, the last content:  end|ok  (exit 0)  end|stopped  (exit 3)  end|error|<code>  (exit 1)
+# with <code> no-network, no-space, download, checksum, apt-provided or other. A human log is FILE.log (appended).
+# SIGTERM: the running step finishes, the .part files stay for the resume, end|stopped, exit 3.
+set -uo pipefail
+
+DATA_MOUNT="${AB_DATA_MOUNT:-/media/autobleem}"
+INSTALLER="${AB_RA_INSTALLER:-/usr/local/share/autobleem/installer/install.sh}"
+
+usage() { echo "usage: autobleem-retroarch install|remove [--bios] --progress FILE [--mount DIR] [-- install.sh options]" >&2; exit 2; }
+
+ACTION="${1:-}"; [ $# -gt 0 ] && shift
+case "$ACTION" in install|remove) ;; *) usage ;; esac
+BIOS=0; PROGRESS=""; EXTRA=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --bios)     BIOS=1; shift ;;
+        --progress) PROGRESS="${2:-}"; [ -n "$PROGRESS" ] || usage; shift 2 ;;
+        --mount)    DATA_MOUNT="${2:-}"; [ -n "$DATA_MOUNT" ] || usage; shift 2 ;;
+        --)         shift; EXTRA=("$@"); break ;;
+        *)          usage ;;
+    esac
+done
+[ -n "$PROGRESS" ] || usage
+
+LOG="$PROGRESS.log"
+mkdir -p "$(dirname "$PROGRESS")"
+log() { printf '%s autobleem-retroarch: %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+
+# the progress file: write the temporary file, then rename it over the real one
+put() {
+    printf '%s\n' "$1" > "$PROGRESS.tmp" && mv -f "$PROGRESS.tmp" "$PROGRESS"
+}
+
+[ -f "$INSTALLER" ] || { log "no $INSTALLER - run install.sh from a package once"; put "end|error|other"; exit 1; }
+
+args=(--retroarch-add)
+[ "$ACTION" = remove ] && args=(--retroarch-remove)
+[ "$BIOS" -eq 1 ] && args+=(--bios)
+args+=(--yes --mount "$DATA_MOUNT" ${EXTRA[@]+"${EXTRA[@]}"})
+
+# install.sh writes to a pipe that never reaches end-of-file (opened read-write here), so read -t 1 is the clock:
+# a quiet second still rewrites the line
+FIFO="$PROGRESS.fifo"
+rm -f "$FIFO"
+mkfifo "$FIFO" || { log "cannot make $FIFO"; put "end|error|other"; exit 1; }
+exec 3<>"$FIFO"
+rm -f "$FIFO"
+
+log "starting: bash $INSTALLER ${args[*]}"
+bash "$INSTALLER" "${args[@]}" >&3 2>>"$LOG" </dev/null &
+PID=$!
+trap 'kill -TERM "$PID" 2>/dev/null' TERM INT
+
+line_now=""; err_code=""; last_write=-1
+handle() {
+    case "$1" in
+        "@@phase "*)
+            local i_n key done_n total
+            read -r _ i_n key done_n total <<< "$1"
+            line_now="phase ${i_n}|${key}|${done_n:-0}|${total:-0}"
+            put "$line_now"; last_write=$SECONDS ;;
+        "@@error "*) err_code="${1#@@error }" ;;
+        "@@end "*)   ;;
+        *)           printf '%s\n' "$1" >> "$LOG" ;;
+    esac
+}
+
+while true; do
+    if IFS= read -r -t 1 line <&3; then
+        handle "$line"
+    elif ! kill -0 "$PID" 2>/dev/null; then
+        while IFS= read -r -t 0.2 line <&3; do handle "$line"; done   # what the last second left in the pipe
+        break
+    fi
+    if [ -n "$line_now" ] && [ "$SECONDS" -ne "$last_write" ]; then
+        put "$line_now"; last_write=$SECONDS
+    fi
+done
+
+wait "$PID"; rc=$?
+# a SIGTERM that lands in wait makes it return at once: the real status is still to come
+while [ "$rc" -gt 128 ] && kill -0 "$PID" 2>/dev/null; do wait "$PID"; rc=$?; done
+exec 3<&-
+log "install.sh ended with $rc"
+case "$rc" in
+    0) put "end|ok"; exit 0 ;;
+    3) put "end|stopped"; exit 3 ;;
+    *)
+        case "$err_code" in
+            no-network|no-space|download|checksum|apt-provided) ;;
+            *) err_code=other ;;
+        esac
+        put "end|error|$err_code"; exit 1 ;;
+esac

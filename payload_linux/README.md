@@ -317,6 +317,19 @@ first start. *Options -> Updates* picks what it follows - `release`
 build) or `off` - and the L2+R2 menu's *Software Update* checks on the spot. Over ssh the same is
 `sudo bash install.sh --update` from an unpacked package.
 
+### Adding and removing RetroArch later
+
+The launcher (Options -> RetroArch) starts `/usr/local/bin/autobleem-retroarch install|remove [--bios] --progress FILE`
+as a child process (it runs as root, so no sudo). `install` adds RetroArch or updates it: the program, its cores and
+assets, its libraries; `--bios` also fetches the BIOS pack. `remove` takes the program, cores, info, assets, database,
+cheats, overlays, shaders, downloads and records away and keeps your roms, saves, playlists, thumbnails, config,
+`retroarch.cfg` and the BIOS (`--bios` removes the BIOS too); an `apt`-provided `/usr/bin/retroarch` is never touched.
+FILE holds one line, `phase <i>/<n>|<key>|<done>|<total>`, rewritten at least every second, then `end|ok`,
+`end|stopped` or `end|error|<code>` (exit 0, 3, 1); `FILE.log` is the human log. SIGTERM stops after the running step
+and a second `install` resumes (`.part` files stay, `curl -C -`). By hand over ssh:
+`sudo bash install.sh --retroarch-add [--bios]` / `--retroarch-remove [--bios]` (the same `@@phase` lines on stdout).
+Test: `tests/rc/test_retroarch_addremove.sh`.
+
 ## Where things go
 
 ```
