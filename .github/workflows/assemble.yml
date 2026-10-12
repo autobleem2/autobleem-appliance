@@ -573,6 +573,12 @@ jobs:
     env:
       AB_REPO_DIR: /home/claude/autobleem-repo
     steps:
+      # this repository's own tools/ (merge_rpi_imager_json.py for a nightly Pi image's Imager json): the job
+      # used to find them in what an earlier job left in this runner's work folder, and failed every nightly
+      # once that copy was gone (2026-10-11). First, so its clean does not touch the checkout below
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: tools
       - uses: actions/checkout@v7
         with:
           repository: autobleem2/autobleem-repo
