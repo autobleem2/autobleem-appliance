@@ -57,6 +57,8 @@ RETROARCH_TARBALL=""            # --retroarch-tarball: a prebuilt RetroArch alre
 OFFLINE_GOOD=" "                # the --offline files that checked out (offline_setup), as " name name "
 OFFLINE_DIR=""                  # --offline: a folder with the RetroArch and cores tarballs (the Pi image carries them), see offline_setup()
 CORES_TARBALL=""                # --cores-tarball: the cores + assets tarball already downloaded (set by --offline too)
+RA_ACTION=""                    # --retroarch-add | --retroarch-remove: only add or take away RetroArch (ra_main), see "RetroArch on its own"
+RA_WITH_BIOS=0                  # --bios: add also fetches the BIOS pack; remove also deletes the BIOS files
 PRINT_PACKAGES=0                # --print-packages: list the distribution packages this install wants, and stop
 THUMBNAILS=none                 # --thumbnails: none (the launcher fetches each game's cover itself) | boxarts (the whole
                                 # PS1 set, ~350 MB, for covers offline) | all (+ title screens, snaps)
@@ -163,6 +165,13 @@ Usage: sudo bash install.sh [options]
                        against DIR/SHA256SUMS) instead of the download site - what the Raspberry Pi image carries, so
                        its first boot downloads no RetroArch at all. A missing or damaged file falls back to the site
   --cores-tarball FILE install this cores + assets tarball (already downloaded and checked) instead of fetching one
+  --retroarch-add      only add (or update) RetroArch: the program, its cores and assets, RetroArch's libraries; the
+                       program is laid last. Resumes after a stop. Markers "@@phase i/n key done total" on stdout
+                       (autobleem-retroarch turns them into the launcher's progress file). Needs an existing
+                       data partition (--mount); --offline, --repo, --retroarch-tarball, --cores-tarball, --no-packages work
+  --retroarch-remove   only take RetroArch away (program, cores, info, assets, database, cheats, overlays, shaders,
+                       downloads, records); roms, saves, config, retroarch.cfg, playlists, thumbnails and the BIOS stay
+  --bios               with --retroarch-add: also fetch the BIOS pack; with --retroarch-remove: also delete the BIOS
   --print-packages     print the distribution packages this install wants (one per line) and stop - what the image
                        build pre-installs (run it with --platform rpi inside the image's root)
   --yes                answer every confirmation with YES (unattended runs; --shrink-root repartitions!)
@@ -199,6 +208,9 @@ parse_args() {
             --retroarch-tarball) RETROARCH_TARBALL="${2:?--retroarch-tarball needs a file}"; shift 2 ;;
             --offline)        OFFLINE_DIR="${2:?--offline needs a directory}"; shift 2 ;;
             --cores-tarball)  CORES_TARBALL="${2:?--cores-tarball needs a file}"; shift 2 ;;
+            --retroarch-add)    RA_ACTION=add; ASSUME_YES=1; shift ;;
+            --retroarch-remove) RA_ACTION=remove; ASSUME_YES=1; shift ;;
+            --bios)           RA_WITH_BIOS=1; shift ;;
             --print-packages) PRINT_PACKAGES=1; shift ;;
             --thumbnails)     THUMBNAILS="${2:?--thumbnails needs boxarts, all or none}"; shift 2 ;;
             --yes)            ASSUME_YES=1; shift ;;
@@ -1220,14 +1232,14 @@ download_bios_pack() {
     # four workers (xargs -P 4), each file by bios_fetch_one: a part an interrupted run left is continued (wget -c),
     # every result is one line the counter below turns into the running percentage
     local results
-    results="$(mktemp /tmp/autobleem-bios.XXXXXX)"
+    results="$(mktemp "${TMPDIR:-/tmp}/autobleem-bios.XXXXXX")"
     export RA_ROOT
     export -f bios_fetch_one
     # on the installer screen (AB_UI_MARKERS=1) a 1 s background loop adds "@@detail" lines: files, speed, MB; a
     # terminal run never starts it
     local detail_pid="" entries_file=""
     if [ "${AB_UI_MARKERS:-0}" = 1 ]; then
-        entries_file="$(mktemp /tmp/autobleem-bios-entries.XXXXXX)"
+        entries_file="$(mktemp "${TMPDIR:-/tmp}/autobleem-bios-entries.XXXXXX")"
         printf '%s\n' "$entries" >"$entries_file"
         bios_detail_loop "$entries_file" "$results" "$total" &
         detail_pid=$!
@@ -1899,6 +1911,7 @@ install_update_helper() {
     local share=/usr/local/share/autobleem
     run install -d -m 0755 "$share" "$share/installer/system"
     run install -m 0755 "$SCRIPT_DIR/system/autobleem-update.sh" /usr/local/bin/autobleem-update
+    run install -m 0755 "$SCRIPT_DIR/system/autobleem-retroarch" /usr/local/bin/autobleem-retroarch   # the launcher's RetroArch runner
     run install -m 0644 "$SCRIPT_DIR/system/autobleem-install-ui.py" "$share/autobleem-install-ui.py"
     run rm -rf "$share/install-ui" "$share/splash.png"      # the screen's logos and fonts (splash.png: the old logo)
     run cp -r "$SCRIPT_DIR/system/install-ui" "$share/install-ui"
@@ -2242,6 +2255,252 @@ EOF
 }
 
 #*******************************
+# RetroArch on its own (PLATFORM-24)
+#*******************************
+# --retroarch-add / --retroarch-remove: the launcher's Options -> RetroArch (through system/autobleem-retroarch,
+# which turns the markers below into the launcher's progress file). Nothing else is touched: no partitions, no
+# boot setup, no AutoBleem payload. The data partition must be there already (--mount).
+#   stdout:  "@@phase i/n key done total" at every phase and about once a second while a download runs
+#            "@@error code" before exit 1 (no-network, no-space, download, checksum, apt-provided, other)
+#            "@@end ok" / "@@end stopped" last; exit 0 / 3 (SIGTERM: the running step finishes, scratch stays) / 1
+# Every phase can be run again: a download keeps its .part and goes on with curl -C -, a finished and checked file
+# in the scratch folder is not fetched twice, and unpacking is plain overwriting. The program is laid LAST, so a
+# stop or a failure before that leaves the old RetroArch (if any) working. AB_FS_ROOT puts /usr/local under a
+# folder instead (the tests); AB_ARCH replaces dpkg's answer; AB_RA_MIN_MIB the free space asked for.
+RA_TMP=""; RA_STOP=0; RA_CHILD=""; RA_PH_I=0; RA_PH_N=0; RA_PH_KEY=""
+RA_TARBALL=""; RA_CORES=""
+FS_ROOT="${AB_FS_ROOT:-}"
+
+ra_marker() { printf '@@phase %s/%s %s %s %s\n' "$RA_PH_I" "$RA_PH_N" "$RA_PH_KEY" "${1:-0}" "${2:-0}"; }
+ra_check_stop() {
+    if [ "$RA_STOP" -ne 0 ]; then
+        log "stopped - the scratch files stay for the next run"
+        echo "@@end stopped"
+        exit 3
+    fi
+    return 0
+}
+ra_phase() { RA_PH_I=$((RA_PH_I + 1)); RA_PH_KEY="$1"; log "RetroArch: $1"; ra_marker 0 0; ra_check_stop; }
+ra_fail() { warn "$2"; printf '@@error %s\n' "$1"; exit 1; }
+# curl's exit codes: 6 no such host and 7 cannot connect are "no network"; the rest of them a bad download
+ra_curl_fail() { # ra_curl_fail RC WHAT
+    case "$1" in
+        6|7) ra_fail no-network "no network: $2 (curl $1)" ;;
+        *)   ra_fail download "could not download $2 (curl $1)" ;;
+    esac
+}
+ra_sha_ok() { [ -z "$2" ] || [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; }
+
+# ra_download URL DEST SHA TOTAL: into DEST.part, continued where an earlier run stopped, checked, then renamed
+ra_download() {
+    local url="$1" dest="$2" sha="$3" total="${4:-0}" rc=0
+    mkdir -p "$(dirname "$dest")"
+    if [ -f "$dest" ] && ra_sha_ok "$dest" "$sha"; then
+        log "$(basename "$dest") is here already"
+        ra_marker "$(stat -c %s "$dest")" "$total"
+        return 0
+    fi
+    rm -f "$dest"
+    if [ -n "$sha" ] && [ -f "$dest.part" ] && ra_sha_ok "$dest.part" "$sha"; then
+        mv -f "$dest.part" "$dest"        # the stop came between the last byte and the rename
+        return 0
+    fi
+    log "downloading $url"
+    curl -fL -sS -C - -o "$dest.part" "$url" </dev/null &
+    RA_CHILD=$!
+    while kill -0 "$RA_CHILD" 2>/dev/null; do
+        ra_marker "$(stat -c %s "$dest.part" 2>/dev/null || echo 0)" "$total"
+        sleep 1 & wait $! || true
+    done
+    wait "$RA_CHILD" || rc=$?
+    RA_CHILD=""
+    ra_check_stop
+    [ "$rc" -eq 0 ] || ra_curl_fail "$rc" "$url"
+    if ! ra_sha_ok "$dest.part" "$sha"; then
+        rm -f "$dest.part"
+        ra_fail checksum "the sha256 of $(basename "$dest") does not match - fetched again on the next run"
+    fi
+    mv -f "$dest.part" "$dest"
+    ra_marker "$(stat -c %s "$dest")" "$total"
+}
+
+# ra_index FILE: "version url sha256 size" of this architecture's entry in a latest.json ("-" for what is missing)
+ra_index() {
+    python3 - "$1" "$ARCH" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+a = d.get(sys.argv[2]) or {}
+print(d.get("version", "") or a.get("date", "") or "-", a.get("url", "") or "-", a.get("sha256", "") or "-", a.get("size", "") or "-")
+PY
+}
+
+# ra_resolve KIND VAR: the newest tarball of KIND (retroarch, cores) for this machine, into the scratch folder
+ra_resolve() {
+    local kind="$1" json="$RA_TMP/$1-latest.json" version url sha size rc=0
+    curl -fsSL -o "$json" "$REPO_URL/$PLATFORM_DIR/$kind/latest.json" </dev/null || rc=$?
+    [ "$rc" -eq 0 ] || ra_curl_fail "$rc" "$REPO_URL/$PLATFORM_DIR/$kind/latest.json"
+    read -r version url sha size < <(ra_index "$json")
+    [ "$url" != - ] || ra_fail download "the download site has no $kind for $ARCH"
+    [ "$sha" != - ] || sha=""
+    [ "$size" != - ] || size=0
+    log "$kind: $version"
+    RA_RESOLVED="$RA_TMP/$kind-${sha:0:12}.tar.gz"      # a newer version never continues an older one's part
+    if [ -z "$sha" ]; then RA_RESOLVED="$RA_TMP/$kind.tar.gz"; fi
+    ra_download "$url" "$RA_RESOLVED" "$sha" "$size"
+}
+
+ra_check_space() {
+    command -v curl >/dev/null 2>&1 || ra_fail other "curl is missing"
+    command -v python3 >/dev/null 2>&1 || ra_fail other "python3 is missing"
+    local need="${AB_RA_MIN_MIB:-1536}" free
+    [ "$RA_WITH_BIOS" -eq 0 ] || need=$((need + 256))
+    free=$(( $(df -Pk "$DATA_MOUNT" | awk 'NR == 2 { print $4 }') / 1024 ))
+    log "free space on $MEDIUM: $free MiB, wanted $need MiB"
+    [ "$free" -ge "$need" ] || ra_fail no-space "only $free MiB free on $MEDIUM, RetroArch wants $need MiB"
+    offline_setup
+}
+
+ra_add() {
+    if [ -x "$FS_ROOT/usr/bin/retroarch" ] && [ ! -f "$RA_STAMP" ]; then
+        ra_fail apt-provided "RetroArch here is the distribution's (/usr/bin/retroarch) - apt owns it, not AutoBleem"
+    fi
+    RA_PH_N=7
+    [ "$RA_WITH_BIOS" -eq 0 ] || RA_PH_N=8
+    mkdir -p "$RA_TMP"
+
+    ra_phase check-space
+    ra_check_space
+
+    ra_phase download-retroarch
+    if [ -n "$RETROARCH_TARBALL" ]; then
+        [ -f "$RETROARCH_TARBALL" ] || ra_fail other "no such file: $RETROARCH_TARBALL"
+        RA_TARBALL="$RETROARCH_TARBALL"
+    else
+        ra_resolve retroarch
+        RA_TARBALL="$RA_RESOLVED"
+    fi
+
+    ra_phase download-cores
+    if [ "$DO_DOWNLOADS" -eq 0 ]; then
+        log "no cores (--no-downloads)"
+    elif [ -n "$CORES_TARBALL" ]; then
+        [ -f "$CORES_TARBALL" ] || ra_fail other "no such file: $CORES_TARBALL"
+        RA_CORES="$CORES_TARBALL"
+    else
+        ra_resolve cores
+        RA_CORES="$RA_RESOLVED"
+    fi
+
+    ra_phase download-libs
+    if [ "$DO_PACKAGES" -eq 1 ]; then
+        local pkgs=()
+        mapfile -t pkgs < <(retroarch_depends_packages "$RA_TARBALL")
+        if [ "${#pkgs[@]}" -eq 0 ] || packages_present "${pkgs[@]}"; then
+            log "RetroArch's libraries are in the system already"
+        else
+            apt_update_once
+            run apt-get install -y "${pkgs[@]}" || ra_fail download "could not install RetroArch's libraries (${pkgs[*]})"
+        fi
+    fi
+
+    if [ "$RA_WITH_BIOS" -eq 1 ]; then
+        ra_phase download-bios
+        DO_BIOS=1; RETROARCH_MODE=prebuilt
+        download_bios_pack
+    fi
+
+    ra_phase unpack
+    create_retroarch_tree
+    if [ -n "$RA_CORES" ]; then
+        tar -xzf "$RA_CORES" -C "$RA_ROOT" --no-same-owner --no-same-permissions \
+            || ra_fail other "could not unpack the cores tarball"
+        log "RetroArch: $(ls "$RA_ROOT/cores" | grep -c '_libretro\.so$' || true) cores"
+    fi
+
+    ra_phase merge-config
+    write_retroarch_config
+    write_retroarch_core_options
+    write_retroarch_state_keys
+
+    ra_phase install-binary
+    # the list first, so a stop in the middle of the unpacking can still be taken away again
+    mkdir -p "$(dirname "$RA_FILES")"
+    tar -tzf "$RA_TARBALL" | sed 's|^\./||' | grep -v '/$' > "$RA_FILES.new" || true
+    mv -f "$RA_FILES.new" "$RA_FILES"
+    tar -xzf "$RA_TARBALL" -C "${FS_ROOT:-/}" --no-same-owner || ra_fail other "could not unpack RetroArch"
+    hash -r
+    sync
+    rm -rf "$RA_TMP"
+    log "RetroArch $(cat "$RA_STAMP" 2>/dev/null || echo '?') is installed on $MACHINE"
+    echo "@@end ok"
+}
+
+# the binary first, then the folders: each is renamed to NAME.removing and then deleted, so a stop (or a power
+# cut) leaves either the whole folder or a .removing the next run finishes
+ra_remove() {
+    if [ ! -f "$RA_STAMP" ] && [ ! -x "$RA_BIN" ] && [ -x "$FS_ROOT/usr/bin/retroarch" ]; then
+        ra_fail apt-provided "RetroArch here is the distribution's (/usr/bin/retroarch) - apt owns it, remove it with apt"
+    fi
+    RA_PH_N=1
+    ra_phase remove-files
+    rm -f "$RA_BIN"
+    if [ -f "$RA_FILES" ]; then
+        local f
+        while IFS= read -r f; do
+            case "$f" in
+                usr/*|etc/*) case "$f" in *..*) continue ;; esac; rm -f "${FS_ROOT}/$f" ;;
+            esac
+        done < "$RA_FILES"
+    fi
+    rm -f "$RA_STAMP" "$RA_FILES" "$FS_ROOT/usr/local/share/autobleem/retroarch.depends"
+    rm -rf "$RA_TMP"
+
+    local dirs=("$RA_ROOT/cores" "$RA_ROOT/info" "$RA_ROOT/assets" "$RA_ROOT/database" "$RA_ROOT/cheats"
+                "$RA_ROOT/overlays" "$RA_ROOT/shaders" "$RA_ROOT/downloads" "$RA_ROOT/records"
+                "$RA_ROOT/Retroarch themes" "$DATA_MOUNT/Retroarch themes")
+    [ "$RA_WITH_BIOS" -eq 0 ] || dirs+=("$RA_ROOT/system")
+    local d done_n=0 left
+    for left in "$RA_ROOT"/*.removing "$DATA_MOUNT"/*.removing; do   # what a stopped run left
+        [ -e "$left" ] && rm -rf "$left"
+    done
+    for d in "${dirs[@]}"; do
+        ra_check_stop
+        if [ -d "$d" ]; then
+            rm -rf "$d.removing"
+            mv "$d" "$d.removing"
+            rm -rf "$d.removing"
+        fi
+        done_n=$((done_n + 1))
+        ra_marker "$done_n" "${#dirs[@]}"
+    done
+    # the BIOS that is left is the user's: AutoBleem's own System/Bios and RetroArch/system stay without --bios
+    sync
+    log "RetroArch is removed from $MACHINE; roms, saves, playlists, config and retroarch.cfg are kept"
+    echo "@@end ok"
+}
+
+ra_main() {
+    if [ -z "$FS_ROOT" ] && [ "$(id -u)" -ne 0 ]; then die "run this with sudo"; fi
+    ARCH="${AB_ARCH:-$(dpkg --print-architecture)}"
+    detect_platform
+    case "$PLATFORM" in
+        rpi)   PLATFORM_DIR=rpi ;;
+        pcusb) PLATFORM_DIR=pc ;;
+    esac
+    [ -d "$DATA_MOUNT" ] || ra_fail other "no data partition at $DATA_MOUNT - run the installer first"
+    RA_ROOT="$DATA_MOUNT/RetroArch"
+    RA_TMP="$DATA_MOUNT/.autobleem-tmp/ra"
+    RA_BIN="$FS_ROOT/usr/local/bin/retroarch"
+    RA_STAMP="$FS_ROOT/usr/local/share/autobleem/retroarch.version"
+    RA_FILES="$FS_ROOT/usr/local/share/autobleem/retroarch.files"
+    trap 'RA_STOP=1; [ -z "$RA_CHILD" ] || kill "$RA_CHILD" 2>/dev/null || true' TERM INT
+    case "$RA_ACTION" in
+        add)    ra_add ;;
+        remove) ra_remove ;;
+    esac
+}
+
+#*******************************
 # main
 #*******************************
 # "@@phase N/M text" lines for autobleem-firstboot.sh's screen (system/autobleem-install-ui.py), which
@@ -2275,6 +2534,10 @@ main() {
         base_packages
         [ "$BOOT_SPLASH" -eq 1 ] && echo plymouth
         retroarch_depends_packages "${RETROARCH_TARBALL:-}"
+        exit 0
+    fi
+    if [ -n "$RA_ACTION" ]; then
+        ra_main
         exit 0
     fi
     phase 1 "Preparing"
