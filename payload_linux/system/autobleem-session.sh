@@ -107,6 +107,25 @@ pi_hdmi_audio() {
 }
 
 #*******************************
+# cd_drive_quiet
+#*******************************
+# A disc in a USB CD drive is read raw by the launcher and pcsx-abnxt (SG_IO on /dev/sgN). On a new disc udev's
+# 60-persistent-storage.rules runs blkid on /dev/srN, whose 2048-byte reads of a PS1 disc (Mode 2) each time out
+# after 30 s - and every raw read waits behind them: a game stood ~2 minutes after the tray closed (Pi 400,
+# 2026-10-12). The rules' own switch turns that probing off for CD drives; nothing mounts a PS1 disc anyway.
+# Written to /run (RAM), so a stick update brings it and nothing on the system disk changes.
+CD_RULE=/run/udev/rules.d/59-autobleem-cdrom.rules
+cd_drive_quiet() {
+    local rule='SUBSYSTEM=="block", KERNEL=="sr[0-9]*", ENV{UDEV_DISABLE_PERSISTENT_STORAGE_RULES_FLAG}="1"'
+    [ "$(cat "$CD_RULE" 2>/dev/null)" = "$rule" ] && return 0
+    mkdir -p "${CD_RULE%/*}" && printf '%s\n' "$rule" > "$CD_RULE" || return 0
+    udevadm control --reload 2>/dev/null || true
+    echo "autobleem-session: no filesystem probing on CD drives ($CD_RULE)"
+}
+
+cd_drive_quiet
+
+#*******************************
 # boot_splash_down
 #*******************************
 # The boot splash (plymouth, the AutoBleem logo - see install.sh's install_boot_splash) holds the DRM
