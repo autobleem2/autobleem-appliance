@@ -926,19 +926,41 @@ download_retroarch_content() {
         local total count=0 failed=0 zip
         total="$(wc -l < "$index")"
         log "RetroArch: downloading $total cores into $RA_ROOT/cores"
+        # on the installer screen (AB_UI_MARKERS=1) the BIOS pack's @@detail loop reports files, speed and MB here too;
+        # the index has no sizes, so there is no total - the loop gets each zip's size once it is down
+        local detail_pid="" entries_file="" results=""
+        if [ "${AB_UI_MARKERS:-0}" = 1 ]; then
+            entries_file="$(mktemp "${TMPDIR:-/tmp}/autobleem-cores-entries.XXXXXX")"
+            results="$(mktemp "${TMPDIR:-/tmp}/autobleem-cores.XXXXXX")"
+            bios_detail_loop "$entries_file" "$results" "$total" "$tmp" '*.zip' &
+            detail_pid=$!
+        fi
         while read -r _date _crc zip; do
             [ -n "$zip" ] || continue
             count=$((count + 1))
             printf '\r    [%3d/%3d] %3d%% %-50s' "$count" "$total" "$((count * 100 / total))" "$zip"
             # a re-run keeps the cores it has; RetroArch's Online Updater is the way to refresh them
-            [ -f "$RA_ROOT/cores/${zip%.zip}" ] && continue
+            if [ -f "$RA_ROOT/cores/${zip%.zip}" ]; then
+                [ -z "$results" ] || printf 'KEPT %s\n' "$zip" >>"$results"
+                continue
+            fi
             if wget -q -O "$tmp/$zip" "$cores_url/$zip" && unzip -oq "$tmp/$zip" -d "$RA_ROOT/cores"; then
+                if [ -n "$results" ]; then
+                    printf -- '- %s - %s\n' "$(stat -c %s "$tmp/$zip" 2>/dev/null || echo 0)" "$zip" >>"$entries_file"
+                    printf 'OK %s\n' "$zip" >>"$results"
+                fi
                 rm -f "$tmp/$zip"
             else
                 failed=$((failed + 1))
+                [ -z "$results" ] || printf 'FAIL %s\n' "$zip" >>"$results"
             fi
         done < "$index"
         printf '\n'
+        if [ -n "$detail_pid" ]; then
+            kill "$detail_pid" 2>/dev/null || true
+            wait "$detail_pid" 2>/dev/null || true
+            rm -f "$entries_file" "$results"
+        fi
         [ "$failed" -eq 0 ] || warn "$failed cores did not download - RetroArch's Online Updater can fetch them later"
     fi
 
@@ -1159,8 +1181,13 @@ bios_fetch_one() {
 # results file) plus the *.part files under $RA_ROOT/system, speed = the bytes gained over the last ~5 samples.
 # The leading "\r" ends whatever progress line the counter left open, so the marker is a line of its own.
 # Started in the background by download_bios_pack (only with AB_UI_MARKERS=1) and killed when the step ends.
+#
+# The per-core fallback (download_retroarch_content) reuses it with two more arguments: <part dir> <part name> - where
+# the file in flight lies (default $RA_ROOT/system, *.part) - and entries "- <size> - <zip>" whose size is appended
+# once a zip is down (the buildbot index has no sizes). With a sum of 0 the line has no total: "<done> MB".
 bios_detail_loop() {
-    local entries_file="$1" results="$2" total="$3" sum n finished parts done_b i
+    local entries_file="$1" results="$2" total="$3" part_dir="${4:-$RA_ROOT/system}" part_name="${5:-*.part}"
+    local sum n finished parts done_b i
     local -a hist=()
     sum="$(awk '{ s += $2 } END { printf "%d", s }' "$entries_file")"
     while :; do
@@ -1168,7 +1195,7 @@ bios_detail_loop() {
         finished="$(awk 'NR == FNR { p = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ /, "", p); sz[p] = $2; next }
                          $1 == "OK" || $1 == "KEPT" { s += sz[substr($0, index($0, " ") + 1)] }
                          END { printf "%d", s }' "$entries_file" "$results" 2>/dev/null || true)"
-        parts="$(find "$RA_ROOT/system" -name '*.part' -printf '%s\n' 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }')"
+        parts="$(find "$part_dir" -name "$part_name" -printf '%s\n' 2>/dev/null | awk '{ s += $1 } END { printf "%d", s }')"
         done_b=$(( ${finished:-0} + ${parts:-0} ))
         hist+=("$done_b")
         [ "${#hist[@]}" -le 6 ] || hist=("${hist[@]:1}")
@@ -1176,7 +1203,10 @@ bios_detail_loop() {
         awk -v n="${n:-0}" -v total="$total" -v done="$done_b" -v sum="$sum" -v old="${hist[0]}" -v secs="$i" 'BEGIN {
             speed = secs > 0 ? (done - old) / secs / 1048576 : 0
             if (speed < 0) speed = 0
-            printf "\r@@detail %d/%d files - %.1f MB/s - %d of %d MB\n", n, total, speed, done / 1048576, sum / 1048576 }'
+            if (sum > 0)
+            printf "\r@@detail %d/%d files - %.1f MB/s - %d of %d MB\n", n, total, speed, done / 1048576, sum / 1048576
+            else
+            printf "\r@@detail %d/%d files - %.1f MB/s - %d MB\n", n, total, speed, done / 1048576 }'
         sleep 1
     done
 }
