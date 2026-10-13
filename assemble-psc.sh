@@ -114,11 +114,15 @@ find "$STAGE" -type f -name placeholder -delete
 # executable bits: none of the three tarballs above are guaranteed to have kept them (Windows-hosted repo
 # splits have already lost this bit more than once this session - see assemble.sh's own history)
 chmod +x "$STAGE/Autobleem/bin/autobleem/autobleem-gui" "$STAGE/Autobleem/bin/autobleem/absplash" \
-         "$STAGE/Autobleem/bin/autobleem/abfatflag" "$STAGE/Autobleem/bin/autobleem/abupdate" 2>/dev/null || true
+         "$STAGE/Autobleem/bin/autobleem/abfatflag" "$STAGE/Autobleem/bin/autobleem/abupdate" "$STAGE/Autobleem/bin/autobleem/abfetch" \
+         "$STAGE/Autobleem/bin/autobleem/abdialog" "$STAGE/Autobleem/bin/autobleem/run.sh" 2>/dev/null || true
 chmod +x "$STAGE"/Autobleem/*.sh "$STAGE"/Autobleem/rc/*.sh 2>/dev/null || true
 chmod +x "$STAGE"/Apps/*/*.sh "$STAGE"/Extensions/pscbios/bt "$STAGE"/Apps/abflashkit/abflashkit 2>/dev/null || true
 chmod +x "$STAGE"/Autobleem/bin/abpad/abpadd 2>/dev/null || true
 chmod +x "$STAGE"/Autobleem/bin/emu/pcsx-ab "$STAGE"/Autobleem/bin/emunxt/pcsx-ab 2>/dev/null || true
+# the chmods above ignore a missing file, so check every program that is there has the bit: a stick formatted
+# ext4 keeps the package's modes, and a new binary must not ship 0644 again
+"$(dirname "${BASH_SOURCE[0]}")/tools/check_psc_modes.sh" "$STAGE" || exit 1
 
 # rooted at the stick's root, no top-level folder (unlike the Linux tarballs): AutoBleemInstaller.exe
 # extracts it straight onto the stick and recognises it by Autobleem/bin/autobleem/autobleem-gui, Themes/
