@@ -61,14 +61,28 @@ add_tree() {
 # data partition: extensions/store, extensions/pscbios, processors/unzip and processors/pe (every Linux package
 # carries both processors, assemble.sh). A package without them installs, boots and has no Store. And
 # system/openbios.bin (assemble.sh's stage_openbios): without it a player with no Sony BIOS gets pcsx-ab's HLE one.
+# The PSC package (assemble-psc.sh) has Extensions/{store,pscbios} and System/Processors/{unzip,pe} at the stick's root
+# and NO OpenBIOS by design (01a860e: the console's own firmware BIOS is what pcsx-ab reads). The Windows package
+# (assemble-win.sh) has AutoBleem/Extensions/store, AutoBleem/Processors/unzip and AutoBleem/Bios/openbios.bin - no
+# PSC-Bios and no PE processor (console only), so those are not asked for there. Paths are matched ignoring case.
 check_bundled() {
-    local label="$1" target="$2" tree="$3" want miss=""
-    for want in extensions/store extensions/pscbios processors/unzip processors/pe; do
-        [ -n "$(find "$tree" -maxdepth 3 -type d -path "*/$want" | head -1)" ] || miss="$miss $want"
+    local label="$1" target="$2" tree="$3" want miss="" dirs files what
+    case "$target" in
+        psc) dirs="extensions/store extensions/pscbios processors/unzip processors/pe"; files=""
+             what="the bundled extensions and processors (no OpenBIOS on the console)" ;;
+        win) dirs="extensions/store processors/unzip"; files="bios/openbios.bin"
+             what="the bundled Store, unzip processor and OpenBIOS" ;;
+        *)   dirs="extensions/store extensions/pscbios processors/unzip processors/pe"; files="system/openbios.bin"
+             what="the bundled extensions, processors and OpenBIOS" ;;
+    esac
+    for want in $dirs; do
+        [ -n "$(find "$tree" -maxdepth 3 -type d -ipath "*/$want" | head -1)" ] || miss="$miss $want"
     done
-    [ -n "$(find "$tree" -maxdepth 3 -type f -path "*/system/openbios.bin" | head -1)" ] || miss="$miss system/openbios.bin"
+    for want in $files; do
+        [ -n "$(find "$tree" -maxdepth 3 -type f -ipath "*/$want" | head -1)" ] || miss="$miss $want"
+    done
     if [ -n "$miss" ]; then fail "$label" "package lacks:$miss"
-    else pass "$label" "package carries the bundled extensions, processors and OpenBIOS"; fi
+    else pass "$label" "package carries $what"; fi
 }
 # unpack LABEL TARGET FILE REQUIRE_EMULATORS
 unpack() {
@@ -81,7 +95,7 @@ unpack() {
     # (unzip returns 1 for warnings - the odd file name - and the tree is still readable)
     [ -n "$(ls -A "$dest")" ] || { fail "$1" "could not unpack $(basename "$3")"; return; }
     add_tree "$1" "$2" "$dest" "$4"
-    case "$2" in rpi | rpi64 | pcusb) check_bundled "$1" "$2" "$dest" ;; esac
+    case "$2" in rpi | rpi64 | pcusb | psc | win) check_bundled "$1" "$2" "$dest" ;; esac
 }
 
 for dist in "$@"; do

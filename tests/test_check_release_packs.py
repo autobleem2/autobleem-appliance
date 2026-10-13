@@ -13,11 +13,20 @@ ALPHA1 = os.path.join(ROOT, "release", "v2.0.0-alpha1.lock")
 
 
 
-def small_zip(text):
-    # check_release.sh unpacks autobleem-psc-*.zip as a launcher package, so the stick zips must be real zips
+PSC_ESSENTIALS = ["Extensions/store/extension.ini", "Extensions/pscbios/extension.ini",
+                  "System/Processors/unzip/processor.ini", "System/Processors/pe/processor.ini"]
+WIN_ESSENTIALS = ["AutoBleem/Extensions/store/extension.ini", "AutoBleem/Processors/unzip/processor.ini",
+                  "AutoBleem/Bios/openbios.bin"]
+
+
+def small_zip(text, names=tuple(PSC_ESSENTIALS)):
+    # check_release.sh unpacks autobleem-psc-*.zip as a launcher package, so the stick zips must be real zips -
+    # and since AUTOBLEEM-8 they must carry what the PSC package carries (no OpenBIOS there, by design)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr(zipfile.ZipInfo("Autobleem/note.txt", date_time=(2026, 1, 1, 0, 0, 0)), text)
+        for n in names:
+            z.writestr(zipfile.ZipInfo(n, date_time=(2026, 1, 1, 0, 0, 0)), "x")
     return buf.getvalue()
 
 
@@ -105,6 +114,42 @@ class CheckPacks(unittest.TestCase):
         rc, out = self.run_check(text, "alpha1.lock")
         self.assertEqual(rc, 0, out)
         self.assertIn("0 passed, 0 failed", out)
+
+
+class CheckBundledPscWin(unittest.TestCase):
+    """AUTOBLEEM-8: the PSC and Windows packages carry the same essentials as the Linux ones."""
+
+    def run_with(self, fname, names):
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = os.path.join(tmp, "dist")
+            os.mkdir(dist)
+            with open(os.path.join(dist, fname), "wb") as f:
+                f.write(small_zip("t", names))
+            lock = os.path.join(tmp, "t.lock")
+            with open(lock, "w") as f:
+                f.write(HEAD)
+            p = subprocess.run(["bash", SCRIPT, lock, dist], capture_output=True, text=True, timeout=120)
+            return p.returncode, p.stdout + p.stderr
+
+    def test_psc_complete_passes_without_openbios(self):
+        rc, out = self.run_with("autobleem-psc-v9.0.0.zip", PSC_ESSENTIALS)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("PASS psc-zip: package carries the bundled extensions and processors", out)
+
+    def test_psc_missing_items_fail(self):
+        rc, out = self.run_with("autobleem-psc-v9.0.0.zip", [n for n in PSC_ESSENTIALS if "pscbios" not in n and "/pe/" not in n])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("FAIL psc-zip: package lacks: extensions/pscbios processors/pe", out)
+
+    def test_win_complete_passes(self):
+        rc, out = self.run_with("autobleem-win-product-v9.0.0.zip", WIN_ESSENTIALS)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("PASS win-product: package carries the bundled Store, unzip processor and OpenBIOS", out)
+
+    def test_win_missing_items_fail(self):
+        rc, out = self.run_with("autobleem-win-product-v9.0.0.zip", [WIN_ESSENTIALS[1]])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("FAIL win-product: package lacks: extensions/store bios/openbios.bin", out)
 
 
 if __name__ == "__main__":
