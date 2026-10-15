@@ -7,10 +7,14 @@
 #
 # install is also the update (a newer remote version replaces the old); install --bios also fetches the BIOS pack;
 # remove keeps the BIOS unless --bios. It runs the installed copy of install.sh (--retroarch-add / --retroarch-remove)
-# and turns its "@@phase i/n key done total" lines into FILE - ONE line, rewritten atomically (FILE.tmp, then rename)
-# at every phase change and at least every second:
+# and turns its "@@phase i/n key done total unit item item_i item_n" lines into FILE - ONE line, rewritten atomically
+# (FILE.tmp, then rename) at every phase change and at least every second:
 #
-#   phase <i>/<n>|<key>|<done>|<total>
+#   phase <i>/<n>|<key>|<done>|<total>|<unit>|<item>|<item_i>|<item_n>
+#
+# unit is bytes, files or items; item the current package (empty when none); item_i/item_n which package of how many
+# in the phase; total is never 0. A reader that knows the first four fields only keeps working (the line may end
+# there when an older install.sh runs).
 #
 # and at the end, once, the last content:  end|ok  (exit 0)  end|stopped  (exit 3)  end|error|<code>  (exit 1)
 # with <code> no-network, no-space, download, checksum, apt-provided or other. A human log is FILE.log (appended).
@@ -69,9 +73,14 @@ line_now=""; err_code=""; last_write=-1
 handle() {
     case "$1" in
         "@@phase "*)
-            local i_n key done_n total
-            read -r _ i_n key done_n total <<< "$1"
-            line_now="phase ${i_n}|${key}|${done_n:-0}|${total:-0}"
+            local i_n key done_n total unit item item_i item_n
+            read -r _ i_n key done_n total unit item item_i item_n <<< "$1"
+            if [ -n "${unit:-}" ]; then
+                [ "${item:--}" != - ] || item=""
+                line_now="phase ${i_n}|${key}|${done_n:-0}|${total:-0}|${unit}|${item}|${item_i:-1}|${item_n:-1}"
+            else     # an install.sh that still writes the four fields
+                line_now="phase ${i_n}|${key}|${done_n:-0}|${total:-0}"
+            fi
             put "$line_now"; last_write=$SECONDS ;;
         "@@error "*) err_code="${1#@@error }" ;;
         "@@end "*)   ;;
