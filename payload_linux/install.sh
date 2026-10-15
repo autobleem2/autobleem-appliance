@@ -166,7 +166,7 @@ Usage: sudo bash install.sh [options]
                        its first boot downloads no RetroArch at all. A missing or damaged file falls back to the site
   --cores-tarball FILE install this cores + assets tarball (already downloaded and checked) instead of fetching one
   --retroarch-add      only add (or update) RetroArch: the program, its cores and assets, RetroArch's libraries; the
-                       program is laid last. Resumes after a stop. Markers "@@phase i/n key done total" on stdout
+                       program is laid last. Resumes after a stop. Markers "@@phase i/n key done total unit item item_i item_n" on stdout
                        (autobleem-retroarch turns them into the launcher's progress file). Needs an existing
                        data partition (--mount); --offline, --repo, --retroarch-tarball, --cores-tarball, --no-packages work
   --retroarch-remove   only take RetroArch away (program, cores, info, assets, database, cheats, overlays, shaders,
@@ -1267,7 +1267,13 @@ download_bios_pack() {
     export -f bios_fetch_one
     # on the installer screen (AB_UI_MARKERS=1) a 1 s background loop adds "@@detail" lines: files, speed, MB; a
     # terminal run never starts it
-    local detail_pid="" entries_file=""
+    local detail_pid="" entries_file="" ra_pid=""
+    if [ "$RA_ACTION" = add ]; then      # --retroarch-add: the files done so far, once a second (the unit is files)
+        RA_BIOS_TOTAL=$(( total > 0 ? total : 1 ))
+        RA_UNIT=files; ra_item biospack 1 1
+        ( while true; do ra_marker "$(grep -c . "$results" 2>/dev/null || true)" "$RA_BIOS_TOTAL"; sleep 1; done ) &
+        ra_pid=$!
+    fi
     if [ "${AB_UI_MARKERS:-0}" = 1 ]; then
         entries_file="$(mktemp "${TMPDIR:-/tmp}/autobleem-bios-entries.XXXXXX")"
         printf '%s\n' "$entries" >"$entries_file"
@@ -1283,6 +1289,7 @@ download_bios_pack() {
         wait "$detail_pid" 2>/dev/null || true
         rm -f "$entries_file"
     fi
+    if [ -n "$ra_pid" ]; then kill "$ra_pid" 2>/dev/null || true; wait "$ra_pid" 2>/dev/null || true; fi
     local fetched kept failed
     fetched="$(grep -c '^OK ' "$results" || true)"
     kept="$(grep -c '^KEPT ' "$results" || true)"
@@ -2290,7 +2297,10 @@ EOF
 # --retroarch-add / --retroarch-remove: the launcher's Options -> RetroArch (through system/autobleem-retroarch,
 # which turns the markers below into the launcher's progress file). Nothing else is touched: no partitions, no
 # boot setup, no AutoBleem payload. The data partition must be there already (--mount).
-#   stdout:  "@@phase i/n key done total" at every phase and about once a second while a download runs
+#   stdout:  "@@phase i/n key done total unit item item_i item_n" at every phase and about once a second while
+#            a download or unpack runs. unit: bytes|files|items; item: the current package (one word, "-" none);
+#            item_i/item_n: which package of how many in the phase. total is never 0. The first five fields are
+#            the old format: a reader of only those keeps working.
 #            "@@error code" before exit 1 (no-network, no-space, download, checksum, apt-provided, other)
 #            "@@end ok" / "@@end stopped" last; exit 0 / 3 (SIGTERM: the running step finishes, scratch stays) / 1
 # Every phase can be run again: a download keeps its .part and goes on with curl -C -, a finished and checked file
@@ -2301,7 +2311,22 @@ RA_TMP=""; RA_STOP=0; RA_CHILD=""; RA_PH_I=0; RA_PH_N=0; RA_PH_KEY=""
 RA_TARBALL=""; RA_CORES=""
 FS_ROOT="${AB_FS_ROOT:-}"
 
-ra_marker() { printf '@@phase %s/%s %s %s %s\n' "$RA_PH_I" "$RA_PH_N" "$RA_PH_KEY" "${1:-0}" "${2:-0}"; }
+RA_UNIT=items; RA_ITEM=-; RA_ITEM_I=1; RA_ITEM_N=1
+
+# the current package name as one word ("-" when there is none)
+ra_clean() { local s; s="$(printf '%s' "${1:-}" | tr -c 'A-Za-z0-9._+:~-' '_')"; printf '%s' "${s:--}"; }
+# ra_item NAME I N: the package the next markers are about (I of N in this phase)
+ra_item() { RA_ITEM="$(ra_clean "$1")"; RA_ITEM_I="${2:-1}"; RA_ITEM_N="${3:-1}"; }
+# ra_marker DONE TOTAL: "@@phase i/n key done total unit item item_i item_n". The first five fields are the old
+# format (a consumer that reads only those keeps working). The total is never 0: a phase that knows no size
+# says 0 of 1 items, then 1 of 1.
+ra_marker() {
+    local d="${1:-0}" t="${2:-0}" u="$RA_UNIT"
+    case "$d$t" in *[!0-9]*) d=0; t=0 ;; esac
+    if [ "$t" -le 0 ]; then t=1; u=items; d=0; fi
+    [ "$d" -le "$t" ] || d="$t"
+    printf '@@phase %s/%s %s %s %s %s %s %s %s\n' "$RA_PH_I" "$RA_PH_N" "$RA_PH_KEY" "$d" "$t" "$u" "$RA_ITEM" "$RA_ITEM_I" "$RA_ITEM_N"
+}
 ra_check_stop() {
     if [ "$RA_STOP" -ne 0 ]; then
         log "stopped - the scratch files stay for the next run"
@@ -2310,7 +2335,14 @@ ra_check_stop() {
     fi
     return 0
 }
-ra_phase() { RA_PH_I=$((RA_PH_I + 1)); RA_PH_KEY="$1"; log "RetroArch: $1"; ra_marker 0 0; ra_check_stop; }
+# ra_phase KEY UNIT ITEM ITEM_I ITEM_N TOTAL: the phase's first marker (0 of TOTAL) goes out at once
+ra_phase() {
+    RA_PH_I=$((RA_PH_I + 1)); RA_PH_KEY="$1"; RA_UNIT="${2:-items}"
+    ra_item "${3:--}" "${4:-1}" "${5:-1}"
+    log "RetroArch: $1"; ra_marker 0 "${6:-0}"; ra_check_stop
+}
+# a test seam: a pause after every step of the phases that are over in a blink
+ra_pause() { [ -z "${AB_RA_STEP_DELAY:-}" ] || sleep "$AB_RA_STEP_DELAY"; }
 ra_fail() { warn "$2"; printf '@@error %s\n' "$1"; exit 1; }
 # curl's exit codes: 6 no such host and 7 cannot connect are "no network"; the rest of them a bad download
 ra_curl_fail() { # ra_curl_fail RC WHAT
@@ -2322,24 +2354,28 @@ ra_curl_fail() { # ra_curl_fail RC WHAT
 ra_sha_ok() { [ -z "$2" ] || [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; }
 
 # ra_download URL DEST SHA TOTAL: into DEST.part, continued where an earlier run stopped, checked, then renamed
+# The unit is bytes when TOTAL is known; without one it is items (this phase's one package: 0 of 1, then 1 of 1).
 ra_download() {
     local url="$1" dest="$2" sha="$3" total="${4:-0}" rc=0
+    ra_item "$(basename "$url")" "$RA_ITEM_I" "$RA_ITEM_N"
+    RA_UNIT=bytes; [ "$total" -gt 0 ] || RA_UNIT=items
     mkdir -p "$(dirname "$dest")"
     if [ -f "$dest" ] && ra_sha_ok "$dest" "$sha"; then
         log "$(basename "$dest") is here already"
-        ra_marker "$(stat -c %s "$dest")" "$total"
+        ra_marker "$total" "$total"; [ "$RA_UNIT" = bytes ] || ra_marker 1 1
         return 0
     fi
     rm -f "$dest"
     if [ -n "$sha" ] && [ -f "$dest.part" ] && ra_sha_ok "$dest.part" "$sha"; then
         mv -f "$dest.part" "$dest"        # the stop came between the last byte and the rename
+        ra_marker "$total" "$total"; [ "$RA_UNIT" = bytes ] || ra_marker 1 1
         return 0
     fi
     log "downloading $url"
     curl -fL -sS -C - -o "$dest.part" "$url" </dev/null &
     RA_CHILD=$!
     while kill -0 "$RA_CHILD" 2>/dev/null; do
-        ra_marker "$(stat -c %s "$dest.part" 2>/dev/null || echo 0)" "$total"
+        if [ "$RA_UNIT" = bytes ]; then ra_marker "$(stat -c %s "$dest.part" 2>/dev/null || echo 0)" "$total"; else ra_marker 0 1; fi
         sleep 1 & wait $! || true
     done
     wait "$RA_CHILD" || rc=$?
@@ -2351,7 +2387,28 @@ ra_download() {
         ra_fail checksum "the sha256 of $(basename "$dest") does not match - fetched again on the next run"
     fi
     mv -f "$dest.part" "$dest"
-    ra_marker "$(stat -c %s "$dest")" "$total"
+    ra_marker "$total" "$total"; [ "$RA_UNIT" = bytes ] || ra_marker 1 1
+}
+
+# ra_content_length URL: the size the server says (a HEAD request), 0 when it says none
+ra_content_length() {
+    curl -fsSIL "$1" </dev/null 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print n + 0 }'
+}
+
+# ra_tar_unpack FILE DEST [tar options]: unpack FILE, reporting the bytes of it read so far (the position of tar's
+# standard input, from /proc/PID/fdinfo/0) once a second
+ra_tar_unpack() {
+    local file="$1" dest="$2" size pid pos rc=0; shift 2
+    size="$(stat -c %s "$file")"
+    tar -xz -C "$dest" "$@" <"$file" &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        pos="$(awk '$1 == "pos:" { print $2 }' "/proc/$pid/fdinfo/0" 2>/dev/null || true)"
+        ra_marker "${pos:-0}" "$size"
+        sleep 1 & wait $! || true
+    done
+    wait "$pid" || rc=$?
+    return "$rc"
 }
 
 # ra_index FILE: "version url sha256 size" of this architecture's entry in a latest.json ("-" for what is missing)
@@ -2373,7 +2430,9 @@ ra_resolve() {
     [ "$url" != - ] || ra_fail download "the download site has no $kind for $ARCH"
     [ "$sha" != - ] || sha=""
     [ "$size" != - ] || size=0
-    log "$kind: $version"
+    case "$size" in *[!0-9]*) size=0 ;; esac
+    [ "$size" -gt 0 ] || size="$(ra_content_length "$url")"
+    log "$kind: $version ($size bytes)"
     RA_RESOLVED="$RA_TMP/$kind-${sha:0:12}.tar.gz"      # a newer version never continues an older one's part
     if [ -z "$sha" ]; then RA_RESOLVED="$RA_TMP/$kind.tar.gz"; fi
     ra_download "$url" "$RA_RESOLVED" "$sha" "$size"
@@ -2390,6 +2449,24 @@ ra_check_space() {
     offline_setup
 }
 
+# ra_count_lines TOTAL: reads tar's -v file list, a marker when the second changes (and at the last file)
+ra_count_lines() {
+    local total="$1" n=0 last=-1 line
+    while IFS= read -r line; do
+        n=$((n + 1))
+        if [ "$SECONDS" -ne "$last" ] || [ "$n" -ge "$total" ]; then ra_marker "$n" "$total"; last=$SECONDS; fi
+    done
+}
+
+# what a stopped or cut remove left: folders renamed to NAME.removing
+ra_finish_removal() {
+    local left
+    for left in "$RA_ROOT"/*.removing "$DATA_MOUNT"/*.removing; do
+        [ -e "$left" ] && rm -rf "$left"
+    done
+    return 0
+}
+
 ra_add() {
     if [ -x "$FS_ROOT/usr/bin/retroarch" ] && [ ! -f "$RA_STAMP" ]; then
         ra_fail apt-provided "RetroArch here is the distribution's (/usr/bin/retroarch) - apt owns it, not AutoBleem"
@@ -2398,66 +2475,97 @@ ra_add() {
     [ "$RA_WITH_BIOS" -eq 0 ] || RA_PH_N=8
     mkdir -p "$RA_TMP"
 
-    ra_phase check-space
+    ra_phase check-space items disk-space 1 2 2
     ra_check_space
+    ra_marker 1 2
+    # a remove that a power cut or a kill left half done is finished first: the .removing folders go
+    ra_item leftovers 2 2
+    ra_finish_removal
+    ra_marker 2 2
 
-    ra_phase download-retroarch
     if [ -n "$RETROARCH_TARBALL" ]; then
         [ -f "$RETROARCH_TARBALL" ] || ra_fail other "no such file: $RETROARCH_TARBALL"
         RA_TARBALL="$RETROARCH_TARBALL"
+        ra_phase download-retroarch bytes "$(basename "$RA_TARBALL")" 1 1 "$(stat -c %s "$RA_TARBALL")"
+        ra_marker "$(stat -c %s "$RA_TARBALL")" "$(stat -c %s "$RA_TARBALL")"
     else
+        ra_phase download-retroarch items retroarch 1 1 1
         ra_resolve retroarch
         RA_TARBALL="$RA_RESOLVED"
     fi
 
-    ra_phase download-cores
     if [ "$DO_DOWNLOADS" -eq 0 ]; then
         log "no cores (--no-downloads)"
+        ra_phase download-cores items none 1 1 1
+        ra_marker 1 1
     elif [ -n "$CORES_TARBALL" ]; then
         [ -f "$CORES_TARBALL" ] || ra_fail other "no such file: $CORES_TARBALL"
         RA_CORES="$CORES_TARBALL"
+        ra_phase download-cores bytes "$(basename "$RA_CORES")" 1 1 "$(stat -c %s "$RA_CORES")"
+        ra_marker "$(stat -c %s "$RA_CORES")" "$(stat -c %s "$RA_CORES")"
     else
+        ra_phase download-cores items cores 1 1 1
         ra_resolve cores
         RA_CORES="$RA_RESOLVED"
     fi
 
-    ra_phase download-libs
-    if [ "$DO_PACKAGES" -eq 1 ]; then
-        local pkgs=()
-        mapfile -t pkgs < <(retroarch_depends_packages "$RA_TARBALL")
-        if [ "${#pkgs[@]}" -eq 0 ] || packages_present "${pkgs[@]}"; then
-            log "RetroArch's libraries are in the system already"
-        else
-            apt_update_once
-            run apt-get install -y "${pkgs[@]}" || ra_fail download "could not install RetroArch's libraries (${pkgs[*]})"
-        fi
+    # the libraries one package at a time (apt-get install P), so the phase counts packages and names the current one
+    ra_phase download-libs items none 1 1 1
+    local pkgs=() p k=0
+    [ "$DO_PACKAGES" -eq 0 ] || mapfile -t pkgs < <(retroarch_depends_packages "$RA_TARBALL")
+    if [ "${#pkgs[@]}" -eq 0 ]; then
+        log "RetroArch's libraries are in the system already"
+        ra_marker 1 1
+    else
+        for p in "${pkgs[@]}"; do
+            ra_item "$p" $((k + 1)) "${#pkgs[@]}"
+            ra_marker "$k" "${#pkgs[@]}"
+            if ! packages_present "$p"; then
+                apt_update_once
+                run apt-get install -y "$p" || ra_fail download "could not install RetroArch's library $p"
+            fi
+            k=$((k + 1))
+            ra_check_stop
+        done
+        ra_marker "$k" "${#pkgs[@]}"
     fi
 
     if [ "$RA_WITH_BIOS" -eq 1 ]; then
-        ra_phase download-bios
+        ra_phase download-bios items biospack 1 1 1
         DO_BIOS=1; RETROARCH_MODE=prebuilt
+        RA_BIOS_TOTAL=1
         download_bios_pack
+        RA_UNIT=files; ra_marker "$RA_BIOS_TOTAL" "$RA_BIOS_TOTAL"
     fi
 
-    ra_phase unpack
     create_retroarch_tree
     if [ -n "$RA_CORES" ]; then
-        tar -xzf "$RA_CORES" -C "$RA_ROOT" --no-same-owner --no-same-permissions \
+        ra_phase unpack bytes "$(basename "$RA_CORES")" 1 1 "$(stat -c %s "$RA_CORES")"
+        ra_tar_unpack "$RA_CORES" "$RA_ROOT" --no-same-owner --no-same-permissions \
             || ra_fail other "could not unpack the cores tarball"
+        ra_marker "$(stat -c %s "$RA_CORES")" "$(stat -c %s "$RA_CORES")"
         log "RetroArch: $(ls "$RA_ROOT/cores" | grep -c '_libretro\.so$' || true) cores"
+    else
+        ra_phase unpack items none 1 1 1
+        ra_marker 1 1
     fi
 
-    ra_phase merge-config
-    write_retroarch_config
-    write_retroarch_core_options
-    write_retroarch_state_keys
+    ra_phase merge-config items config 1 3 3
+    ra_marker 0 3; write_retroarch_config; ra_pause
+    ra_item core-options 2 3; ra_marker 1 3; write_retroarch_core_options; ra_pause
+    ra_item state-keys 3 3; ra_marker 2 3; write_retroarch_state_keys; ra_pause
+    ra_marker 3 3
 
-    ra_phase install-binary
     # the list first, so a stop in the middle of the unpacking can still be taken away again
     mkdir -p "$(dirname "$RA_FILES")"
     tar -tzf "$RA_TARBALL" | sed 's|^\./||' | grep -v '/$' > "$RA_FILES.new" || true
     mv -f "$RA_FILES.new" "$RA_FILES"
-    tar -xzf "$RA_TARBALL" -C "${FS_ROOT:-/}" --no-same-owner || ra_fail other "could not unpack RetroArch"
+    local nfiles; nfiles="$(tar -tzf "$RA_TARBALL" | wc -l)"; [ "$nfiles" -gt 0 ] || nfiles=1    # folders count too: tar -v lists them
+    ra_phase install-binary items retroarch 1 1 "$nfiles"
+    # the files as tar lists them: the count of them is the movement
+    tar -xzvf "$RA_TARBALL" -C "${FS_ROOT:-/}" --no-same-owner | ra_count_lines "$nfiles"
+    [ "${PIPESTATUS[0]}" -eq 0 ] || ra_fail other "could not unpack RetroArch"
+    ra_marker "$nfiles" "$nfiles"
     hash -r
     sync
     rm -rf "$RA_TMP"
@@ -2472,7 +2580,15 @@ ra_remove() {
         ra_fail apt-provided "RetroArch here is the distribution's (/usr/bin/retroarch) - apt owns it, remove it with apt"
     fi
     RA_PH_N=1
-    ra_phase remove-files
+    local dirs=("$RA_ROOT/cores" "$RA_ROOT/info" "$RA_ROOT/assets" "$RA_ROOT/database" "$RA_ROOT/cheats"
+                "$RA_ROOT/overlays" "$RA_ROOT/shaders" "$RA_ROOT/downloads" "$RA_ROOT/records"
+                "$RA_ROOT/Retroarch themes" "$DATA_MOUNT/Retroarch themes")
+    [ "$RA_WITH_BIOS" -eq 0 ] || dirs+=("$RA_ROOT/system")
+    local n_items=$(( ${#dirs[@]} + 1 ))     # the program, then each folder
+    # There is no Stop for a remove (the launcher has none): a SIGTERM does not cut it short, it is finished -
+    # a half-done remove would be left otherwise. One that is left anyway (power cut, kill -9) is finished by the
+    # next --retroarch-remove, and the next --retroarch-add clears its .removing folders.
+    ra_phase remove-files items program 1 "$n_items" "$n_items"
     rm -f "$RA_BIN"
     if [ -f "$RA_FILES" ]; then
         local f
@@ -2485,24 +2601,21 @@ ra_remove() {
     rm -f "$RA_STAMP" "$RA_FILES" "$FS_ROOT/usr/local/share/autobleem/retroarch.depends"
     rm -rf "$RA_TMP"
 
-    local dirs=("$RA_ROOT/cores" "$RA_ROOT/info" "$RA_ROOT/assets" "$RA_ROOT/database" "$RA_ROOT/cheats"
-                "$RA_ROOT/overlays" "$RA_ROOT/shaders" "$RA_ROOT/downloads" "$RA_ROOT/records"
-                "$RA_ROOT/Retroarch themes" "$DATA_MOUNT/Retroarch themes")
-    [ "$RA_WITH_BIOS" -eq 0 ] || dirs+=("$RA_ROOT/system")
-    local d done_n=0 left
-    for left in "$RA_ROOT"/*.removing "$DATA_MOUNT"/*.removing; do   # what a stopped run left
-        [ -e "$left" ] && rm -rf "$left"
-    done
+    ra_marker 1 "$n_items"
+    local d done_n=1
+    ra_finish_removal      # what a stopped or cut run left
     for d in "${dirs[@]}"; do
-        ra_check_stop
+        ra_item "$(basename "$d")" $((done_n + 1)) "$n_items"
+        ra_marker "$done_n" "$n_items"
         if [ -d "$d" ]; then
             rm -rf "$d.removing"
             mv "$d" "$d.removing"
             rm -rf "$d.removing"
         fi
+        ra_pause
         done_n=$((done_n + 1))
-        ra_marker "$done_n" "${#dirs[@]}"
     done
+    ra_marker "$n_items" "$n_items"
     # the BIOS that is left is the user's: AutoBleem's own System/Bios and RetroArch/system stay without --bios
     sync
     log "RetroArch is removed from $MACHINE; roms, saves, playlists, config and retroarch.cfg are kept"
