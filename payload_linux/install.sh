@@ -1268,7 +1268,7 @@ download_bios_pack() {
     # on the installer screen (AB_UI_MARKERS=1) a 1 s background loop adds "@@detail" lines: files, speed, MB; a
     # terminal run never starts it
     local detail_pid="" entries_file="" ra_pid=""
-    if [ "$RA_ACTION" = add ]; then      # --retroarch-add: the files done so far, once a second (the unit is files)
+    if [ "${RA_ACTION:-}" = add ]; then      # --retroarch-add: the files done so far, once a second (the unit is files)
         RA_BIOS_TOTAL=$(( total > 0 ? total : 1 ))
         RA_UNIT=files; ra_item biospack 1 1
         ( while true; do ra_marker "$(grep -c . "$results" 2>/dev/null || true)" "$RA_BIOS_TOTAL"; sleep 1; done ) &
