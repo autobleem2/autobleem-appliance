@@ -64,7 +64,7 @@ on:
   push:
     tags: ['v*']
   schedule:
-    - cron: '17 3 * * *'
+    - cron: '17 5 * * *'   # after the launcher's 03:17 nightly, so the images take the fresh launcher
   # a component's nightly-release (see above): client_payload {repo, sha, version}
   repository_dispatch:
     types: [component-nightly]
