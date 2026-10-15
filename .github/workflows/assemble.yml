@@ -48,6 +48,13 @@
 # replacing the older - a burst of pushes gives at most two assemblies, and a half-built nightly is never
 # killed. The schedule stays as the safety net (a component whose token was missing, a failed dispatch).
 #
+# FOUNDRY-129 (assemble by need): a component's repository_dispatch builds the packages only - the three disk
+# images come with the nightly schedule, a tag, or a dispatch with images=true. A nightly/preview run whose
+# inputs (the components' fingerprint + this appliance commit, sources.json "sources"/"appliance") are already
+# published ends green with "nothing to do"; one whose inputs failed in the last two runs (tools/assemble_guard.py
+# reads the "Inputs <key>" step name of the earlier runs) stops in plan with an error instead of building a
+# third time. workflow_dispatch force=true overrides both.
+#
 # `images: false` (workflow_dispatch) assembles and publishes the packages without the three disk images -
 # the fast "packages only" build. Its sources.json says so, and an automatic run with the same components
 # builds the images rather than skip.
@@ -91,6 +98,10 @@ on:
         description: nightly only - do nothing when the site already has a nightly built from these same components
         type: boolean
         default: false
+      force:
+        description: build even when the site already has these inputs, and even after two failed runs with them (FOUNDRY-129)
+        type: boolean
+        default: false
 
 # never cancel: one run going, at most one pending (GitHub replaces an older pending run with a newer one) -
 # a debounce, not a kill switch. A schedule, a repository_dispatch and a dispatch on develop share the group.
@@ -115,7 +126,7 @@ jobs:
       source_tag: ${{ steps.v.outputs.source_tag }}
       preview_repos: ${{ steps.v.outputs.preview_repos }}
       sources: ${{ steps.v.outputs.sources }}
-      skip: ${{ steps.v.outputs.skip }}
+      skip: ${{ steps.g.outputs.skip }}
       images: ${{ steps.p.outputs.images }}
       sdk: ${{ steps.sdk.outputs.sdk }}
     env:
@@ -136,9 +147,13 @@ jobs:
       - id: p
         run: |
           p="${{ inputs.platforms }}"; [ -n "$p" ] || p="rpi-armhf rpi-arm64 pcusb psc win"
-          # images: only a dispatch can say false; a tag, the schedule and a component's dispatch build them.
+          # images (FOUNDRY-129): a tag, the nightly schedule and a dispatch that asks for them (images, default
+          # true) build them; a component's repository_dispatch builds the packages only - the three images are
+          # ~40 min of the image runner, and the schedule makes them anyway (its sources.json says images: false
+          # for the packages-only build, so the schedule does not skip it).
           # Spelled out in bash: an absent boolean input compares equal to false in an expression
           images="${{ inputs.images }}"; [ "$images" = false ] || images=true
+          [ "${{ github.event_name }}" != repository_dispatch ] || images=false
           echo "images=$images" >> "$GITHUB_OUTPUT"
           echo "list=$(echo $p)" >> "$GITHUB_OUTPUT"
           echo "json=$(printf '%s\n' $p | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
@@ -205,21 +220,28 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "sources=$sum" >> "$GITHUB_OUTPUT"
+          # the run's inputs: the components (sum) and this appliance's own commit; the next step names itself
+          # after it, which is how assemble_guard.py finds earlier runs with the same inputs
+          echo "key=${sum}.${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
           printf '%s' "$fp"
           # the schedule and a component's dispatch (and a dispatch that asks for it) skip when nothing changed:
           # the published folder's sources.json says what it was built from. A packages-only build's says
           # "images": false, a build of some platforms lists them - neither is enough for a run that asks for
           # more (a sources.json from before those keys was a full build)
           skip=false
-          if [ "${{ github.event_name }}" != workflow_dispatch ] || [ "${{ inputs.skip_unchanged }}" = true ]; then
+          # (FOUNDRY-129: the appliance's own commit is part of it - sources.json carries "appliance"; one from
+          # before that key builds once more. force=true never skips.)
+          if { [ "${{ github.event_name }}" != workflow_dispatch ] || [ "${{ inputs.skip_unchanged }}" = true ]; } &&
+             [ "${{ inputs.force }}" != true ]; then
             src="$(curl -sf "https://autobleem.retromenele.pl/$channel/$v/sources.json" || true)"
             pub="$(sed -n 's/.*"platforms": *"\([^"]*\)".*/\1/p' <<< "$src")"
             [ -n "$pub" ] || pub="rpi-armhf rpi-arm64 pcusb psc win"
             covered=true
             for x in ${{ steps.p.outputs.list }}; do case " $pub " in *" $x "*) ;; *) covered=false ;; esac; done
-            if grep -q "\"$sum\"" <<< "$src" && [ "$covered" = true ] &&
+            if grep -q "\"$sum\"" <<< "$src" && grep -q "\"appliance\": *\"$GITHUB_SHA\"" <<< "$src" &&
+               [ "$covered" = true ] &&
                { [ "${{ steps.p.outputs.images }}" = false ] || ! grep -q '"images": *false' <<< "$src"; }; then
-              skip=true; echo "$channel/$v was built from these same components - nothing to do"
+              skip=true; echo "$channel/$v was built from these same components and this appliance commit - nothing new, nothing to build (force=true overrides)"
             fi
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
@@ -227,12 +249,33 @@ jobs:
       # autobleem-core pin of the launcher commit the run builds (the g<hash> of its version), read from that
       # commit's extension.h - NOT release/*.lock, which names the sdk of an old release
       - uses: actions/checkout@v7
-        if: steps.v.outputs.skip != 'true' && steps.p.outputs.images == 'true'
         with:
-          sparse-checkout: tools/launcher_sdk.sh
+          sparse-checkout: |
+            tools/launcher_sdk.sh
+            tools/assemble_guard.py
           sparse-checkout-cone-mode: false
+      # FOUNDRY-129: this step's NAME carries the run's inputs (the jobs API shows it), which is how the guard
+      # below finds the earlier runs with the same inputs
+      - name: Inputs ${{ steps.v.outputs.key }}
+        run: echo "inputs ${{ steps.v.outputs.key }} (components + appliance commit); force=${{ inputs.force }}"
+      # a nightly/preview build that failed twice for these inputs is not started a third time (force overrides)
+      - id: g
+        env:
+          KEY: ${{ steps.v.outputs.key }}
+          SKIP: ${{ steps.v.outputs.skip }}
+          CHANNEL: ${{ steps.v.outputs.channel }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          skip="$SKIP"
+          if [ "$CHANNEL" != release ] && [ "$skip" != true ] && [ "$FORCE" != true ]; then
+            if [ "$(python3 tools/assemble_guard.py --repo "$GITHUB_REPOSITORY" --key "$KEY" --current-run "$GITHUB_RUN_ID")" = stop ]; then
+              echo "::error::assemble failed twice for these inputs ($KEY) - fix first, run by hand with force=true"
+              exit 1
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
       - id: sdk
-        if: steps.v.outputs.skip != 'true' && steps.p.outputs.images == 'true'
+        if: steps.g.outputs.skip != 'true' && steps.p.outputs.images == 'true'
         env:
           LAUNCHER_REF: ${{ steps.v.outputs.launcher_ref }}
         run: |
@@ -728,8 +771,8 @@ jobs:
           set -euo pipefail
           rm -rf out
           mkdir -p out
-          printf '{"sources": "%s", "images": %s, "platforms": "%s", "run": "%s/%s/actions/runs/%s"}\n' \
-            "${{ needs.plan.outputs.sources }}" "${{ needs.plan.outputs.images }}" "${{ needs.plan.outputs.platform_list }}" \
+          printf '{"sources": "%s", "appliance": "%s", "images": %s, "platforms": "%s", "run": "%s/%s/actions/runs/%s"}\n' \
+            "${{ needs.plan.outputs.sources }}" "$GITHUB_SHA" "${{ needs.plan.outputs.images }}" "${{ needs.plan.outputs.platform_list }}" \
             "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > out/sources.json
           docker run --rm \
             -v "$PWD:$PWD" -w "$PWD" -v "$AB_REPO_DIR:$AB_REPO_DIR" -e REPO_DIR="$AB_REPO_DIR" \
