@@ -30,7 +30,7 @@ check() { # check "what" cmd...
 }
 
 # --- the real functions ---
-for fn in bios_fetch_one download_bios_pack; do
+for fn in bg_reap bg_track bios_fetch_one download_bios_pack; do
     awk -v f="$fn" '$0 ~ "^" f "\\(\\) \\{" {p=1} p{print; if (/^\}/) exit}' "$INSTALL_SH" >"$WORK/$fn.sh"
     [ -s "$WORK/$fn.sh" ] || { echo "FAIL: could not extract $fn() from $INSTALL_SH"; exit 1; }
 done
@@ -89,6 +89,8 @@ warn() { echo "WARN $*" >>"$LOG"; }
 install_ps1_bios() { :; }
 sync() { :; }
 # shellcheck disable=SC1090
+BG_PIDS=""; BG_PREV_EXIT=""; BG_GUARD=0     # the globals bg_track keeps (set above the functions in install.sh)
+. "$WORK/bg_reap.sh"; . "$WORK/bg_track.sh"
 . "$WORK/bios_fetch_one.sh"; . "$WORK/download_bios_pack.sh"
 export SCRIPT_DIR="$WORK/pkg"
 PATH="$WORK/bin:$PATH"
@@ -143,6 +145,45 @@ download_bios_pack >"$WORK/run4.out" 2>&1
 check "PS1-only: a second run asks for nothing" test ! -s "$FAKE_LOG"
 check "PS1-only: and reports them kept"         grep -q '0 downloaded, 5 already there' "$LOG"
 
-[ -n "${DEBUG_BIOS_TEST:-}" ] && { cat "$FAKE_LOG"; cat "$LOG"; }
+# --- a failing BIOS fetch that leaves install.sh through exit: the 1 s ticker must not outlive it ---
+# The harness runs download_bios_pack as --retroarch-add does (RA_ACTION=add -> the ticker), with an EXIT trap of its
+# own that prints @@end (it must still run: the guard composes), every fetch failing (fake wget: 404) and
+# install_ps1_bios dying with exit 1 after the ticker has had time to print.
+rm -rf "$SITE" "$WORK/stick"; mkdir -p "$SITE" "$WORK/stick/RetroArch/system"
+printf '%s %s http://fake/nope.dat nope.dat\n' "$(printf 'a%.0s' $(seq 1 64))" 300 >"$manifest"
+mkdir -p "$WORK/bin2"
+# the failing fetch: after the ticker has printed a few markers wget fails (404) and tells the installer to stop
+printf '#!/usr/bin/env bash\nsleep 2.5\nkill -TERM "$HARNESS_PID" 2>/dev/null\nexit 8\n' >"$WORK/bin2/wget"
+chmod +x "$WORK/bin2/wget"
+cat >"$WORK/die_harness.sh" <<HARNESS
+#!/usr/bin/env bash
+RA_ROOT="$WORK/stick/RetroArch"; DATA_MOUNT="$WORK/stick"; DO_BIOS=1; PS1_BIOS_ONLY=0; DRY_RUN=0; RETROARCH_MODE=full
+RA_ACTION=add; RA_UNIT=files; SCRIPT_DIR="$WORK/pkg"; export SCRIPT_DIR
+BG_PIDS=""; BG_PREV_EXIT=""; BG_GUARD=0
+log() { :; }
+warn() { :; }
+sync() { :; }
+ra_item() { :; }
+ra_marker() { printf '@@phase tick %s %s\n' "\${1:-0}" "\${2:-0}"; }
+install_ps1_bios() { exit 1; }
+trap 'exit 3' TERM
+. "$WORK/bg_reap.sh"; . "$WORK/bg_track.sh"; . "$WORK/bios_fetch_one.sh"; . "$WORK/download_bios_pack.sh"
+PATH="$WORK/bin2:\$PATH"
+trap 'echo @@end' EXIT
+download_bios_pack
+HARNESS
+bash -c 'export HARNESS_PID=$$; exec bash "$1"' _ "$WORK/die_harness.sh" >"$WORK/die.out" 2>&1 &
+harness_pid=$!
+wait "$harness_pid"; harness_rc=$?
+size_end="$(wc -c <"$WORK/die.out")"
+sleep 2.5
+check "the failing run left through the stop (exit 3)" test "$harness_rc" -eq 3
+check "the ticker did print while it ran"            test "$(grep -c '^@@phase tick' "$WORK/die.out")" -ge 2
+check "the earlier EXIT trap still ran (@@end last)" test "$(tail -n 1 "$WORK/die.out")" = "@@end"
+check "no marker line after the end"                 test "$(wc -c <"$WORK/die.out")" -eq "$size_end"
+check "no child of the installer is left"            test -z "$(pgrep -P "$harness_pid" 2>/dev/null)"
+check "no ticker process outlives it"                test -z "$(pgrep -f "$WORK/die_harness.sh" 2>/dev/null)"
+
+[ -n "${DEBUG_BIOS_TEST:-}" ] && { cat "$WORK/die.out"; cat "$FAKE_LOG"; cat "$LOG"; }
 [ "$fail" -eq 0 ] && echo "PASS" || echo "FAILED"
 exit "$fail"

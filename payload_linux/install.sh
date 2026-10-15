@@ -934,6 +934,7 @@ download_retroarch_content() {
             results="$(mktemp "${TMPDIR:-/tmp}/autobleem-cores.XXXXXX")"
             bios_detail_loop "$entries_file" "$results" "$total" "$tmp" '*.zip' &
             detail_pid=$!
+            bg_track "$detail_pid"
         fi
         while read -r _date _crc zip; do
             [ -n "$zip" ] || continue
@@ -957,8 +958,7 @@ download_retroarch_content() {
         done < "$index"
         printf '\n'
         if [ -n "$detail_pid" ]; then
-            kill "$detail_pid" 2>/dev/null || true
-            wait "$detail_pid" 2>/dev/null || true
+            bg_reap
             rm -f "$entries_file" "$results"
         fi
         [ "$failed" -eq 0 ] || warn "$failed cores did not download - RetroArch's Online Updater can fetch them later"
@@ -1137,6 +1137,32 @@ download_thumbnails() {
 }
 
 #*******************************
+# bg_track / bg_reap
+#*******************************
+# The 1 s marker tickers and the @@detail loop run as background jobs. bg_track PID registers one and, the first time,
+# puts bg_reap on the EXIT trap (composed with an EXIT trap that is already there), so the job dies on every way out
+# - die, exit, a stop - not only on the normal path. bg_reap kills and reaps every registered job.
+BG_PIDS=""; BG_PREV_EXIT=""; BG_GUARD=0
+bg_reap() {
+    local p
+    for p in $BG_PIDS; do
+        kill "$p" 2>/dev/null || true
+        wait "$p" 2>/dev/null || true
+    done
+    BG_PIDS=""
+}
+bg_track() {
+    local pid="$1" prev
+    if [ "$BG_GUARD" -eq 0 ]; then
+        prev="$(trap -p EXIT)"
+        if [ -n "$prev" ]; then eval "set -- $prev"; BG_PREV_EXIT="$3"; fi    # trap -- 'CMD' EXIT
+        trap 'bg_reap; [ -z "$BG_PREV_EXIT" ] || eval "$BG_PREV_EXIT"' EXIT
+        BG_GUARD=1
+    fi
+    BG_PIDS="$BG_PIDS $pid"
+}
+
+#*******************************
 # bios_fetch_one
 #*******************************
 # One line of the BIOS manifest ("<sha256> <size> <url> <path>", the path may hold spaces) into $RA_ROOT/system/<path>;
@@ -1273,23 +1299,21 @@ download_bios_pack() {
         RA_UNIT=files; ra_item biospack 1 1
         ( while true; do ra_marker "$(grep -c . "$results" 2>/dev/null || true)" "$RA_BIOS_TOTAL"; sleep 1; done ) &
         ra_pid=$!
+        bg_track "$ra_pid"
     fi
     if [ "${AB_UI_MARKERS:-0}" = 1 ]; then
         entries_file="$(mktemp "${TMPDIR:-/tmp}/autobleem-bios-entries.XXXXXX")"
         printf '%s\n' "$entries" >"$entries_file"
         bios_detail_loop "$entries_file" "$results" "$total" &
         detail_pid=$!
+        bg_track "$detail_pid"
     fi
     printf '%s\n' "$entries" | xargs -d '\n' -P 4 -I{} bash -c 'bios_fetch_one "$1"' _ {} \
         | tee "$results" \
         | awk -v total="$total" '{ n++; printf "\r    [%3d/%3d] %3d%% %-50.50s", n, total, n * 100 / total, substr($0, index($0, " ") + 1); fflush() }
                                  END { printf "\n" }'
-    if [ -n "$detail_pid" ]; then
-        kill "$detail_pid" 2>/dev/null || true
-        wait "$detail_pid" 2>/dev/null || true
-        rm -f "$entries_file"
-    fi
-    if [ -n "$ra_pid" ]; then kill "$ra_pid" 2>/dev/null || true; wait "$ra_pid" 2>/dev/null || true; fi
+    bg_reap
+    [ -z "$detail_pid" ] || rm -f "$entries_file"
     local fetched kept failed
     fetched="$(grep -c '^OK ' "$results" || true)"
     kept="$(grep -c '^KEPT ' "$results" || true)"
