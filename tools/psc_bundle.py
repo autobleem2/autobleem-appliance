@@ -76,7 +76,7 @@ Run it again over a stick that has AutoBleem to update it: the launcher, the scr
 tools are replaced; your games, save states, memory cards, settings, RetroArch's saves and playlists, and anything
 else on the stick stay as they are.
 
-For scripts: AutoBleemInstaller.exe --quiet --drive F: [--covers JUP] [--retroarch] [--bios [--ps1-bios-only]]
+For scripts: AutoBleemInstaller.exe --quiet --drive F: [--covers JUP] [--retroarch] [--bios]
              [--samples] [--online | --channel release|testing|nightly]
              --online (or --channel) ignores payload\\ and downloads from https://autobleem.retromenele.pl as the
              small installer does.

@@ -140,6 +140,18 @@ check_packs() {
 }
 check_packs
 
+# check_openbios_pin - [openbios] tag of the lock: the autobleem2/open_bios release the packages bundle (stage_openbios,
+# AB_OPENBIOS_TAG). A release is built from a v* release, never the rolling `nightly`. The tag cannot be read from a
+# package (openbios.bin carries no version), so this checks the lock only; a lock without the section is SKIPped.
+check_openbios_pin() {
+    local tag
+    tag="$(lock openbios tag)"
+    if [ -z "$tag" ]; then skip "openbios" "the lock pins no [openbios] tag"
+    elif [[ "$tag" =~ ^v[0-9] ]]; then pass "openbios" "the lock pins open_bios $tag"
+    else fail "openbios" "the lock pins open_bios '$tag' - a release needs a v* tag, not nightly"; fi
+}
+check_openbios_pin
+
 # check_launcher LABEL TARGET TREE BIN
 check_launcher() {
     local label="$1" target="$2" tree="$3" bin="$4" vfile text tokens s bad
