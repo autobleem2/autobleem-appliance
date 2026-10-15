@@ -15,6 +15,13 @@ Plain ini: `[section]` lines, `key = value` lines, `#` comment lines (never afte
 | `[emunxt]`, `[emu]` | `repo`, `commit`, `describe` | `describe` must be in the emulator binary - or, when it is an untagged `<tag>-<n>-g<commit>`, the release's own version (the promote tags that commit after the lock is written) |
 | `[ext_store]`, `[pscbios]` | `repo`, `commit`, `version` | `version` = the extension's `extension.ini` |
 
+## OpenBIOS (`[openbios]`)
+
+`tag = v<x>` pins the autobleem2/open_bios release bundled as `system/openbios.bin` (the build exports it as
+`AB_OPENBIOS_TAG`, read by `stage_openbios`). A release lock names a `v*` tag, never the rolling `nightly`:
+`check_release.sh` FAILs any other tag and SKIPs a lock without the section (v2.0.0-alpha1). The file carries no
+version, so only the lock is checked.
+
 ## Site packs (`[pack.<name>]`, PLATFORM-23 part 7)
 
 The files the site hosts are pinned by name and hash, one section each, same ini format:

@@ -88,7 +88,7 @@ stage_processor() {
 # installers tell it from a Sony BIOS by.
 stage_openbios() {
     local dest="$1" repo=autobleem2/open_bios tag tmp f
-    tag="${AB_SOURCE_TAG:-}"
+    tag="${AB_OPENBIOS_TAG:-${AB_SOURCE_TAG:-}}"    # AB_OPENBIOS_TAG: the v* tag the release lock's [openbios] pins
     if [ -z "$tag" ]; then
         tag="$(gh api "repos/$repo/releases/latest" --jq .tag_name 2>/dev/null)" || tag=""
         [ -n "$tag" ] || { echo "$repo has no v* release yet - a release build cannot bundle its nightly" >&2; return 1; }
